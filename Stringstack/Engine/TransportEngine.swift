@@ -49,8 +49,9 @@ final class TransportEngine {
     var selectedSlot: SlotRef?
     /// Last-clicked scene row, outlined in the grid.
     var selectedScene: Int?
-    /// Fixed record length in bars; nil records freely until stopped.
-    var recordLengthBars: Int? = 4
+    /// Fixed record length in bars; nil (the default) records freely until
+    /// stopped.
+    var recordLengthBars: Int?
 
     var quantize: LaunchQuantize = .bar {
         didSet { markDirty() }

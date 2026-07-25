@@ -9,10 +9,17 @@ import Foundation
 enum DemoFactory {
 
     static func install(into engine: TransportEngine) {
-        engine.tempo = 112
-        while engine.tracks.count < 4 { engine.addTrack() }
+        // Replace the session outright, exactly as New Project does, so
+        // reloading the demo starts from a clean grid instead of layering its
+        // clips onto whatever scenes and tracks are already there.
         let names = ["Drums", "Bass", "Keys", "Shaker"]
-        for (index, name) in names.enumerated() { engine.tracks[index].name = name }
+        let fresh = names.enumerated().map { index, name in
+            Track(name: name, colorIndex: index % 6, sceneCount: 4)
+        }
+        engine.replaceSession(tempo: 112, beatsPerBar: 4, countInBars: 2, quantize: .bar,
+                              sceneCount: 4, masterVolume: 0.9, newTracks: fresh)
+        // The demo isn't the user's saved project — don't let ⌘S overwrite it.
+        engine.projectURL = nil
 
         let format = engine.standardFormat
         let tempo = engine.tempo

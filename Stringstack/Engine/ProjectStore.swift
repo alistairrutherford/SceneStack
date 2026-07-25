@@ -183,19 +183,17 @@ enum ProjectStore {
         engine.markSaved()
     }
 
-    // MARK: - New project
+    // MARK: - Replacing the current session
 
-    /// New Project, guarding unsaved changes: prompts Save / Don't Save /
-    /// Cancel first. Returns without resetting if the user cancels (or
-    /// cancels the save panel for an untitled project).
+    /// Guards unsaved work before an action that throws the current session
+    /// away: prompts Save / Don't Save / Cancel. Returns false when the caller
+    /// must not proceed — the user cancelled, or cancelled the save panel for
+    /// an untitled project.
     @MainActor
-    static func newProjectWithPrompt(engine: TransportEngine) {
-        guard engine.hasUnsavedChanges else {
-            engine.newProject()
-            return
-        }
+    static func confirmDiscardingChanges(engine: TransportEngine, messageText: String) -> Bool {
+        guard engine.hasUnsavedChanges else { return true }
         let alert = NSAlert()
-        alert.messageText = "Save changes before starting a new project?"
+        alert.messageText = messageText
         alert.informativeText = "Your current changes will be lost if you don't save them."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Don't Save")
@@ -203,15 +201,33 @@ enum ProjectStore {
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             engine.saveInPlace()
-            // If saving went through a panel that was cancelled, the project
-            // is still dirty — abort rather than discarding the work.
-            guard !engine.hasUnsavedChanges else { return }
-            engine.newProject()
+            // If saving went through a panel that was cancelled, the project is
+            // still dirty — abort rather than discarding the work.
+            return !engine.hasUnsavedChanges
         case .alertSecondButtonReturn:
-            engine.newProject()
+            return true
         default:
-            break
+            return false
         }
+    }
+
+    /// New Project, guarding unsaved changes first.
+    @MainActor
+    static func newProjectWithPrompt(engine: TransportEngine) {
+        guard confirmDiscardingChanges(engine: engine,
+                                       messageText: "Save changes before starting a new project?")
+        else { return }
+        engine.newProject()
+    }
+
+    /// Load Demo Set. It replaces the whole session, so it takes the same
+    /// unsaved-changes guard as New Project.
+    @MainActor
+    static func loadDemoSetWithPrompt(engine: TransportEngine) {
+        guard confirmDiscardingChanges(engine: engine,
+                                       messageText: "Save changes before loading the demo set?")
+        else { return }
+        DemoFactory.install(into: engine)
     }
 
     // MARK: - Reading

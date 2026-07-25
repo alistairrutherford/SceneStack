@@ -23,7 +23,7 @@ struct StringstackApp: App {
                 Button("Save Project As…") { ProjectStore.saveWithPanel(engine: engine) }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                 Divider()
-                Button("Load Demo Set") { DemoFactory.install(into: engine) }
+                Button("Load Demo Set") { ProjectStore.loadDemoSetWithPrompt(engine: engine) }
             }
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") { engine.undoManager.undo() }
