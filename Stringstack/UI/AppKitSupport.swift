@@ -5,6 +5,19 @@ import AppKit
 // and resigning text-field focus) behind SwiftUI modifiers, so views stay
 // declarative and the event monitor's lifecycle is managed correctly.
 
+/// Runs a structural edit *after* the current AppKit event finishes.
+///
+/// A `.contextMenu` action runs while AppKit is still tracking the menu. If it
+/// mutates the collection behind a `ForEach` (adding/removing a scene, clip or
+/// track), SwiftUI rebuilds the hierarchy mid-tracking and AppKit is left
+/// routing clicks to views that no longer exist — buttons stop responding and
+/// clicks land on a neighbouring column. Deferring one runloop turn lets the
+/// menu dismiss and the event finish before the view tree changes underneath it.
+@MainActor
+func afterMenuDismissal(_ action: @escaping @MainActor () -> Void) {
+    DispatchQueue.main.async(execute: action)
+}
+
 extension View {
     /// Invokes `action` on Delete / Forward-Delete, unless a text field is
     /// being edited and only while `isEnabled` returns true. The underlying
@@ -13,14 +26,6 @@ extension View {
     func onDeleteKey(isEnabled: @escaping () -> Bool,
                      perform action: @escaping () -> Void) -> some View {
         modifier(DeleteKeyMonitor(isEnabled: isEnabled, action: action))
-    }
-
-    /// Push-style performance launching from the computer keyboard (see
-    /// `TransportEngine.performLaunchKey`). Unmodified keys only, and never
-    /// while a text field is being edited — so ⌘-shortcuts and typing (track
-    /// rename, effect search, tempo entry) are untouched.
-    func onSessionLaunchKeys(_ engine: TransportEngine) -> some View {
-        modifier(LaunchKeyMonitor(engine: engine))
     }
 
     /// Clears any text field that AppKit auto-focuses when the window first
@@ -47,33 +52,6 @@ extension View {
                 window.makeFirstResponder(nil)
             }
         })
-    }
-}
-
-private struct LaunchKeyMonitor: ViewModifier {
-    let engine: TransportEngine
-    @State private var monitor: Any?
-
-    func body(content: Content) -> some View {
-        content
-            .onAppear {
-                guard monitor == nil else { return }
-                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    // Leave modifier chords and text editing alone; only plain
-                    // keys perform launches.
-                    let modified = !event.modifierFlags
-                        .intersection([.command, .option, .control]).isEmpty
-                    let editingText = NSApp.keyWindow?.firstResponder is NSTextView
-                    guard !modified, !editingText,
-                          let character = event.charactersIgnoringModifiers?.first,
-                          engine.performLaunchKey(character) else { return event }
-                    return nil
-                }
-            }
-            .onDisappear {
-                if let monitor { NSEvent.removeMonitor(monitor) }
-                monitor = nil
-            }
     }
 }
 

@@ -18,8 +18,17 @@ private enum GridMetrics {
 /// The Ableton-style session view: tracks as columns, scenes as rows.
 struct SessionGridView: View {
     @Environment(TransportEngine.self) private var engine
+    @FocusState private var gridFocused: Bool
 
     var body: some View {
+        // A two-axis ScrollView centres content that is smaller than its
+        // viewport while still laying it out — and hit-testing it — from the
+        // top-leading corner. Drawing and input then disagree, and every click
+        // lands a column to the right of whatever is under the cursor. Anchoring
+        // the scroll view top-leading, and letting a trailing spacer absorb any
+        // slack inside the row, keeps the two in step at every window size
+        // (including when the content is larger than the viewport and the
+        // scroll view proposes an unbounded width).
         ScrollView([.horizontal, .vertical]) {
             HStack(alignment: .top, spacing: GridMetrics.spacing + 3) {
                 sceneColumn
@@ -27,10 +36,23 @@ struct SessionGridView: View {
                     TrackColumn(track: track)
                 }
                 addTrackButton
+                Spacer(minLength: 0)
             }
             .overlay(alignment: .topLeading) { sceneHighlight }
             .padding(.vertical, 4)
             .padding(.horizontal, 2)
+        }
+        .defaultScrollAnchor(.topLeading)
+        // Performance launching is scoped to the grid's keyboard focus: plain
+        // keys only launch while the session view is the active surface, and
+        // clicking into any text field hands focus off so typing works.
+        .focusable()
+        .focused($gridFocused)
+        .onAppear { gridFocused = true }
+        .onKeyPress { press in
+            guard press.modifiers.isEmpty, let character = press.characters.first,
+                  engine.performLaunchKey(character) else { return .ignored }
+            return .handled
         }
     }
 
@@ -136,10 +158,16 @@ private struct SceneNumberLabel: View {
             .onTapGesture { engine.selectScene(scene) }
             .onDrag { NSItemProvider(object: "scenemove:\(scene)" as NSString) }
             .contextMenu {
-                Button("Duplicate Scene") { engine.duplicateScene(scene) }
-                    .disabled(!engine.sceneHasClips(scene))
+                // Structural edits are deferred until the menu has dismissed —
+                // see `afterMenuDismissal`.
+                Button("Duplicate Scene") {
+                    afterMenuDismissal { engine.duplicateScene(scene) }
+                }
+                .disabled(!engine.sceneHasClips(scene))
                 Divider()
-                Button("Delete Scene", role: .destructive) { engine.deleteScene(scene) }
+                Button("Delete Scene", role: .destructive) {
+                    afterMenuDismissal { engine.deleteScene(scene) }
+                }
             }
             .help("Scene \(scene + 1) — drag to reorder · right-click to duplicate or delete")
     }
@@ -197,36 +225,47 @@ private struct SceneLaunchButton: View {
 
     private var isPlaying: Bool { engine.sceneIsPlaying(scene) }
 
+    // The Button is deliberately built *outside* the pulse's `TimelineView`.
+    // A TimelineView's content closure re-runs every display frame, so any
+    // Button created inside it is torn down and rebuilt continuously — which
+    // destroys an in-flight press and makes the button ignore clicks.
     var body: some View {
+        Button {
+            engine.launchScene(scene)
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.surface)
+                pulseLayer
+            }
+            .frame(width: GridMetrics.sceneWidth, height: GridMetrics.cellHeight)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Launch scene \(scene + 1)")
+    }
+
+    /// Beat pulse for the row whose clips are actually playing. Purely
+    /// decorative, and non-hit-testing, so the animation can never interfere
+    /// with the button's own gesture handling.
+    private var pulseLayer: some View {
         TimelineView(.animation(minimumInterval: nil,
                                 paused: reduceMotion || engine.mode == .stopped || !isPlaying)) { _ in
             let beats = engine.currentBeats
-            // The launch button pulses for the row whose clips are actually
-            // playing — not merely the selected row.
             let playing = !reduceMotion && isPlaying && engine.mode != .stopped && beats >= 0
             // 1 at the start of each beat, decaying to 0 before the next.
             let pulse = playing ? pow(1 - (beats - beats.rounded(.down)), 2) : 0
 
-            Button {
-                engine.launchScene(scene)
-            } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.violet.opacity(0.30 * pulse))
                 Image(systemName: "play.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Theme.violet)
                     .scaleEffect(1 + 0.35 * pulse)
-                    .frame(width: GridMetrics.sceneWidth, height: GridMetrics.cellHeight)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Theme.surface)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Theme.violet.opacity(0.30 * pulse))
-                            )
-                    )
             }
-            .buttonStyle(.plain)
-            .help("Launch scene \(scene + 1)")
         }
+        .allowsHitTesting(false)
     }
 }
 
@@ -414,8 +453,10 @@ private struct TrackHeader: View {
         .contentShape(Rectangle())
         .onTapGesture { engine.selectTrack(track) }
         .contextMenu {
-            Button("Rename…") { beginRenaming() }
-            Button("Delete Track", role: .destructive) { engine.deleteTrack(track) }
+            Button("Rename…") { afterMenuDismissal { beginRenaming() } }
+            Button("Delete Track", role: .destructive) {
+                afterMenuDismissal { engine.deleteTrack(track) }
+            }
         }
     }
 
@@ -442,8 +483,11 @@ private struct TrackHeader: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
+                // Only the double-click lives here. Single-click selection is
+                // left to the header's own tap gesture that wraps this view —
+                // stacking a second, competing tap recogniser on the title made
+                // macOS mis-route clicks to a neighbouring column.
                 .onTapGesture(count: 2) { beginRenaming() }
-                .onTapGesture { engine.selectTrack(track) }
                 .help("\(track.name) — click to select, double-click to rename. Right-click to delete this track.")
         }
     }
@@ -728,10 +772,11 @@ private struct FilledCell: View {
     private var isPlaying: Bool { state?.playingClipID == clip.id }
     private var isQueued: Bool { state?.queuedClipID == clip.id }
 
+    // As with the scene launch button: the cell's Button and tap gesture must
+    // live outside any `TimelineView`, or they are rebuilt every display frame
+    // while the clip plays and stop responding reliably to clicks.
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !(isPlaying || isQueued))) { _ in
-            cellBody
-        }
+        cellBody
         .onDrag {
             NSItemProvider(object: "clipmove:\(track.id.uuidString):\(scene)" as NSString)
         }
@@ -741,7 +786,7 @@ private struct FilledCell: View {
                 isRenaming = true
             }
             Button("Duplicate") {
-                engine.duplicateClipDown(clip, on: track, scene: scene)
+                afterMenuDismissal { engine.duplicateClipDown(clip, on: track, scene: scene) }
             }
             .keyboardShortcut("d")
             Divider()
@@ -757,7 +802,7 @@ private struct FilledCell: View {
             }
             Divider()
             Button("Delete Clip", role: .destructive) {
-                engine.deleteClip(on: track, scene: scene)
+                afterMenuDismissal { engine.deleteClip(on: track, scene: scene) }
             }
         }
         .alert("Rename Clip", isPresented: $isRenaming) {
@@ -770,8 +815,6 @@ private struct FilledCell: View {
     private var slotRef: SlotRef { SlotRef(trackID: track.id, scene: scene) }
 
     private var cellBody: some View {
-        let beats = engine.currentBeats
-        let queuedPulse = isQueued ? 0.35 + 0.65 * (1 - (beats - beats.rounded(.down))) : 0
         let isSelected = engine.selectedSlot == slotRef
 
         return ZStack {
@@ -782,21 +825,6 @@ private struct FilledCell: View {
                 .fill(Color.white.opacity(0.4))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 7)
-
-            // Ableton-style follow line sweeping the clip while it plays.
-            if isPlaying {
-                GeometryReader { proxy in
-                    Rectangle()
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: 1.5)
-                        .shadow(color: .black.opacity(0.4), radius: 1)
-                        .position(x: proxy.size.width * playFraction(beats: beats),
-                                  y: proxy.size.height / 2)
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 7)
-                .allowsHitTesting(false)
-            }
 
             HStack(spacing: 6) {
                 playButton
@@ -810,28 +838,57 @@ private struct FilledCell: View {
                 }
                 .foregroundStyle(Color.black.opacity(0.75))
                 Spacer()
-                if isPlaying {
-                    progressRing(beats: beats)
-                }
             }
             .padding(.horizontal, 6)
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.white.opacity(queuedPulse), lineWidth: 2)
-        )
+        // Every per-frame animation lives here, isolated from the controls.
+        .overlay { animatedLayer }
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(isSelected ? Color.white.opacity(0.9) : .clear, lineWidth: 2)
         )
         .shadow(color: isPlaying ? color.opacity(0.55) : .clear, radius: 7)
         .contentShape(Rectangle())
-        .onTapGesture {
-            engine.selectTrack(track)
-            engine.selectScene(scene)
-            engine.selectedSlot = slotRef
-        }
+        // Cell selection is handled once, by the enclosing `ClipCell` — a second
+        // tap recogniser here fired the same selection twice per click and
+        // added avoidable gesture contention.
         .help(isQueued ? "Queued…" : "▶ launches · click selects · DEL deletes")
+    }
+
+    /// Follow line, progress ring and queued-pulse border — the parts that must
+    /// redraw every frame. Non-hit-testing and free of any controls, so the
+    /// cell's button and tap gesture keep stable identity while it plays.
+    private var animatedLayer: some View {
+        TimelineView(.animation(minimumInterval: nil, paused: !(isPlaying || isQueued))) { _ in
+            let beats = engine.currentBeats
+            let queuedPulse = isQueued ? 0.35 + 0.65 * (1 - (beats - beats.rounded(.down))) : 0
+
+            ZStack {
+                // Ableton-style follow line sweeping the clip while it plays.
+                if isPlaying {
+                    GeometryReader { proxy in
+                        Rectangle()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: 1.5)
+                            .shadow(color: .black.opacity(0.4), radius: 1)
+                            .position(x: proxy.size.width * playFraction(beats: beats),
+                                      y: proxy.size.height / 2)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 7)
+
+                    HStack {
+                        Spacer()
+                        progressRing(beats: beats)
+                    }
+                    .padding(.horizontal, 6)
+                }
+
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.white.opacity(queuedPulse), lineWidth: 2)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     /// Live-style launch button — the only part of the cell that plays.

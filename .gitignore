@@ -15,5 +15,7 @@ Builds/MacOSX/*.xcodeproj/xcuserdata/
 # JUCE generated intermediate (kept: .jucer is the source of truth)
 JuceLibraryCode/
 
+build
+
 # Test build output
 Tests/build/

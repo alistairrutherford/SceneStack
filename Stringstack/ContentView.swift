@@ -39,7 +39,6 @@ struct ContentView: View {
         .onDeleteKey(isEnabled: { engine.selectedSlot != nil }) {
             engine.deleteSelectedClip()
         }
-        .onSessionLaunchKeys(engine)
         .clearsInitialTextFocus()
     }
 
