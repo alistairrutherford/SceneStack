@@ -221,17 +221,9 @@ final class TransportEngine {
 
         loadPreferences()
 
-        // Reopen the last project if one is remembered; otherwise install the
-        // demo set on first launch.
-        if let url = ProjectStore.resolveLastProject(), (try? ProjectStore.read(into: self, from: url)) != nil {
-            projectURL = url
-            statusMessage = "Reopened \(url.lastPathComponent)"
-        } else if !UserDefaults.standard.bool(forKey: "didInstallDemoSet") {
-            UserDefaults.standard.set(true, forKey: "didInstallDemoSet")
-            DemoFactory.install(into: self)
-        }
-        // A fresh launch (incl. the demo set / reopened project) is not an
-        // unsaved user edit, and its setup shouldn't populate the undo stack.
+        // Every launch starts on a blank project — no previous project is
+        // reopened. Use File › Open to return to saved work, or Load Demo Set
+        // for the demo content.
         undoManager.removeAllActions()
         hasUnsavedChanges = false
 

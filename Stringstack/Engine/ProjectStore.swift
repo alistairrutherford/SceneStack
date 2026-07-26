@@ -78,7 +78,6 @@ enum ProjectStore {
         do {
             try write(engine: engine, to: url)
             engine.projectURL = url
-            rememberLastProject(url)
             engine.statusMessage = "Saved \(url.lastPathComponent)"
         } catch {
             engine.engineError = "Couldn't save project: \(error.localizedDescription)"
@@ -96,32 +95,10 @@ enum ProjectStore {
         do {
             try read(into: engine, from: url)
             engine.projectURL = url
-            rememberLastProject(url)
             engine.statusMessage = "Opened \(url.lastPathComponent)"
         } catch {
             engine.engineError = "Couldn't open project: \(error.localizedDescription)"
         }
-    }
-
-    // MARK: - Reopen last project
-
-    private static let lastProjectKey = "lastProjectBookmark"
-
-    /// Stores a security-scoped bookmark so the project reopens next launch.
-    static func rememberLastProject(_ url: URL) {
-        if let data = try? url.bookmarkData(options: .withSecurityScope,
-                                            includingResourceValuesForKeys: nil,
-                                            relativeTo: nil) {
-            UserDefaults.standard.set(data, forKey: lastProjectKey)
-        }
-    }
-
-    /// Resolves the last-opened project's URL (nil if none / unresolvable).
-    static func resolveLastProject() -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: lastProjectKey) else { return nil }
-        var stale = false
-        return try? URL(resolvingBookmarkData: data, options: .withSecurityScope,
-                        relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
     // MARK: - Writing
