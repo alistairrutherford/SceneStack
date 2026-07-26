@@ -74,10 +74,15 @@ struct ClipDetailBar: View {
 
         return Group {
             VStack(alignment: .leading, spacing: 2) {
-                Text(engine.isCountingIn ? "Counting in…" : "Recording")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Theme.coral)
-                    .lineLimit(1)
+                // `isCountingIn` comes from the polled transport clock, not
+                // observable state, so it needs a tick to refresh — otherwise
+                // the label stays on "Counting in…" for the whole take.
+                TimelineView(.animation(minimumInterval: 1.0 / 10, paused: false)) { _ in
+                    Text(engine.isCountingIn ? "Counting in…" : "Recording")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Theme.coral)
+                        .lineLimit(1)
+                }
                 Text("\(bars.map { "\($0) bar\($0 == 1 ? "" : "s")" } ?? "free") · \(track.name)")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Theme.dimmed)
@@ -90,7 +95,9 @@ struct ClipDetailBar: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.black.opacity(0.3))
-                LiveRecordingWaveform(windowBars: 4, color: Theme.coral, showsGrid: true)
+                // No `windowBars` override: a fixed take scales to the chosen
+                // REC BARS length, a free one to the shared 2-bar window.
+                LiveRecordingWaveform(color: Theme.coral, showsGrid: true)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 6)
             }

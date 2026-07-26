@@ -109,15 +109,27 @@ final class RecordingService: @unchecked Sendable {
         }
         let count = livePeaks.count - start
         guard count > 0 else { return [] }
-        if count <= bins { return Array(livePeaks[start...]) }
 
-        // Downsample by taking the loudest peak in each bin, so transients
-        // survive rather than being averaged away.
-        return (0..<bins).map { bin in
-            let from = start + bin * count / bins
-            let to = max(from + 1, start + (bin + 1) * count / bins)
-            return livePeaks[from..<to].max() ?? 0
+        var result: [Float]
+        if count <= bins {
+            result = Array(livePeaks[start...])
+        } else {
+            // Downsample by taking the loudest peak in each bin, so transients
+            // survive rather than being averaged away.
+            result = (0..<bins).map { bin in
+                let from = start + bin * count / bins
+                let to = max(from + 1, start + (bin + 1) * count / bins)
+                return livePeaks[from..<to].max() ?? 0
+            }
         }
+
+        // Normalise to the loudest bin on screen, matching `Waveform.peaks` for
+        // stored clips — without this a quiet input draws as a near-flat line
+        // instead of filling the height it is given.
+        if let loudest = result.max(), loudest > 0.001 {
+            result = result.map { $0 / loudest }
+        }
+        return result
     }
 
     func endCapture() {
