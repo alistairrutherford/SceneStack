@@ -318,6 +318,30 @@ final class TransportEngine {
         registerUndo("Delete Track") { $0.deleteTrack(track) }
     }
 
+    /// Reorders a track column (drag left/right). Everything else is keyed by
+    /// track id — the audio channels, playback state and selection — so only
+    /// the array order changes; no audio is interrupted.
+    func moveTrack(from source: Int, to destination: Int) {
+        guard source != destination,
+              source >= 0, source < tracks.count,
+              destination >= 0, destination < tracks.count else { return }
+        let moved = tracks.remove(at: source)
+        tracks.insert(moved, at: destination)
+        markDirty()
+        registerUndo("Move Track") { $0.moveTrack(from: destination, to: source) }
+    }
+
+    /// Resolves a dragged-track payload onto the column it was dropped on.
+    func handleTrackDropPayload(_ payload: String, onto destinationID: UUID) {
+        let prefix = "trackmove:"
+        guard payload.hasPrefix(prefix),
+              let sourceID = UUID(uuidString: String(payload.dropFirst(prefix.count))),
+              let source = tracks.firstIndex(where: { $0.id == sourceID }),
+              let destination = tracks.firstIndex(where: { $0.id == destinationID })
+        else { return }
+        moveTrack(from: source, to: destination)
+    }
+
     func addScene() {
         scenes.append(SessionScene())
         for track in tracks { track.slots.append(nil) }

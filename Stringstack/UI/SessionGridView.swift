@@ -88,10 +88,12 @@ struct SessionGridView: View {
                     .font(.system(size: 9, weight: .heavy))
                     .foregroundStyle(Theme.dimmed)
                     .frame(width: GridMetrics.sceneNumberWidth)
-                Text("SCENES")
+                Text("SCENE")
                     .font(.system(size: 9, weight: .heavy))
                     .tracking(1.5)
                     .foregroundStyle(Theme.dimmed)
+                    .lineLimit(1)
+                    .fixedSize()
                     .frame(width: GridMetrics.sceneWidth)
                 Image(systemName: "stop")
                     .font(.system(size: 9, weight: .heavy))
@@ -388,6 +390,7 @@ private struct TrackHeader: View {
     @State private var volumeDragStart: Double?
     @State private var isEditingName = false
     @State private var nameDraft = ""
+    @State private var dropTargeted = false
     @FocusState private var nameFieldFocused: Bool
 
     private var color: Color { Theme.trackPalette[track.colorIndex % Theme.trackPalette.count] }
@@ -450,14 +453,44 @@ private struct TrackHeader: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         )
+        .overlay(alignment: .leading) {
+            // Insertion marker for a column being dragged onto this one.
+            if dropTargeted {
+                Capsule()
+                    .fill(Theme.violet)
+                    .frame(width: 3)
+                    .offset(x: -5)
+                    .allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { engine.selectTrack(track) }
+        .onDrop(of: [UTType.plainText], isTargeted: $dropTargeted) { providers in
+            handleTrackDrop(providers)
+        }
         .contextMenu {
             Button("Rename…") { afterMenuDismissal { beginRenaming() } }
             Button("Delete Track", role: .destructive) {
                 afterMenuDismissal { engine.deleteTrack(track) }
             }
         }
+    }
+
+    /// Accepts a track dragged onto this column's header and reorders it here.
+    private func handleTrackDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.plainText.identifier)
+        }) else { return false }
+        let destinationID = track.id
+        provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
+            var payload: String?
+            if let data = item as? Data { payload = String(data: data, encoding: .utf8) }
+            else if let text = item as? String { payload = text }
+            else if let text = item as? NSString { payload = text as String }
+            guard let payload else { return }
+            Task { @MainActor in engine.handleTrackDropPayload(payload, onto: destinationID) }
+        }
+        return true
     }
 
     /// The track name — click to rename it inline. Editing commits on Return or
@@ -488,7 +521,10 @@ private struct TrackHeader: View {
                 // stacking a second, competing tap recogniser on the title made
                 // macOS mis-route clicks to a neighbouring column.
                 .onTapGesture(count: 2) { beginRenaming() }
-                .help("\(track.name) — click to select, double-click to rename. Right-click to delete this track.")
+                // The title is the drag handle for reordering columns; the rest
+                // of the header is sliders and a knob that need their own drags.
+                .onDrag { NSItemProvider(object: "trackmove:\(track.id.uuidString)" as NSString) }
+                .help("\(track.name) — click to select, double-click to rename, drag to reorder. Right-click to delete this track.")
         }
     }
 

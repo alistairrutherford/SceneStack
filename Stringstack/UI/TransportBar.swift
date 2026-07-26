@@ -163,6 +163,10 @@ struct TransportBar: View {
                 Text("BPM")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Theme.dimmed)
+                    // Without this the label wraps to one letter per line when
+                    // the transport bar is compressed at the minimum window size.
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
