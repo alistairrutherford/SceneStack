@@ -18,6 +18,15 @@ func afterMenuDismissal(_ action: @escaping @MainActor () -> Void) {
     DispatchQueue.main.async(execute: action)
 }
 
+/// True while a text field has keyboard focus — an editing field puts AppKit's
+/// field editor in the responder chain. Global key handling (clip launching,
+/// the delete key) checks this so ordinary typing isn't stolen: a track name or
+/// tempo containing "a" or "4" must not launch a clip or a scene.
+@MainActor
+var isEditingTextField: Bool {
+    NSApp.keyWindow?.firstResponder is NSTextView
+}
+
 extension View {
     /// Invokes `action` on Delete / Forward-Delete, unless a text field is
     /// being edited and only while `isEnabled` returns true. The underlying
@@ -66,8 +75,7 @@ private struct DeleteKeyMonitor: ViewModifier {
                 guard monitor == nil else { return }
                 monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     let isDeleteKey = event.keyCode == 51 || event.keyCode == 117
-                    let editingText = NSApp.keyWindow?.firstResponder is NSTextView
-                    guard isDeleteKey, !editingText, isEnabled() else { return event }
+                    guard isDeleteKey, !isEditingTextField, isEnabled() else { return event }
                     action()
                     return nil
                 }

@@ -50,7 +50,11 @@ struct SessionGridView: View {
         .focused($gridFocused)
         .onAppear { gridFocused = true }
         .onKeyPress { press in
-            guard press.modifiers.isEmpty, let character = press.characters.first,
+            // The name/tempo fields live inside this focusable subtree, so key
+            // presses still reach here while they are being edited — stand
+            // aside so typing a track name doesn't launch clips or scenes.
+            guard !isEditingTextField, press.modifiers.isEmpty,
+                  let character = press.characters.first,
                   engine.performLaunchKey(character) else { return .ignored }
             return .handled
         }
@@ -388,8 +392,8 @@ private struct TrackHeader: View {
     let track: Track
 
     @State private var volumeDragStart: Double?
-    @State private var isEditingName = false
     @State private var nameDraft = ""
+    @State private var isEditingName = false
     @State private var dropTargeted = false
     @FocusState private var nameFieldFocused: Bool
 
@@ -465,6 +469,10 @@ private struct TrackHeader: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { engine.selectTrack(track) }
+        // Drag the header itself to reorder the column. The controls inside
+        // (sliders, pan knob, name field) consume their own drags first, so
+        // this only fires on the header's empty areas.
+        .onDrag { NSItemProvider(object: "trackmove:\(track.id.uuidString)" as NSString) }
         .onDrop(of: [UTType.plainText], isTargeted: $dropTargeted) { providers in
             handleTrackDrop(providers)
         }
@@ -493,54 +501,82 @@ private struct TrackHeader: View {
         return true
     }
 
-    /// The track name — click to rename it inline. Editing commits on Return or
-    /// when focus leaves; a blank name is rejected (the old name is kept).
-    @ViewBuilder
+    /// The track name: double-click to start editing (which highlights it like
+    /// the tempo field), type, and press Return to apply. Clicking away without
+    /// Return discards the edit, and the engine rejects a blank name so the
+    /// track keeps its current one.
+    ///
+    /// The `TextField` is permanent rather than swapped in for a `Text` on
+    /// demand — swapping the two changed the view's structure at the moment
+    /// focus was set, so the field lost focus instantly and flashed back. While
+    /// it isn't being edited it simply stops hit-testing, so it reads and
+    /// behaves as a plain label: single clicks fall through to the header and
+    /// select the track.
     private var trackTitle: some View {
-        if isEditingName {
-            TextField("Track name", text: $nameDraft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .focused($nameFieldFocused)
-                .onSubmit(commitRename)
-                .onChange(of: nameFieldFocused) { _, focused in
-                    if !focused { commitRename() }
+        TextField("Track name", text: $nameDraft)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(.white.opacity(isEditingName ? 1 : 0.9))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .focused($nameFieldFocused)
+            .onSubmit(commitRename)
+            .allowsHitTesting(isEditingName)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(color.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(color, lineWidth: 1.5)
+                    )
+                    .opacity(isEditingName ? 1 : 0)
+            )
+            .padding(.horizontal, -4)
+            .overlay {
+                // Catches the double-click while the field is inert. A single
+                // click fails this recogniser and passes to the header's tap,
+                // which selects the track.
+                if !isEditingName {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { beginRenaming() }
                 }
-        } else {
-            Text(track.name)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                // Only the double-click lives here. Single-click selection is
-                // left to the header's own tap gesture that wraps this view —
-                // stacking a second, competing tap recogniser on the title made
-                // macOS mis-route clicks to a neighbouring column.
-                .onTapGesture(count: 2) { beginRenaming() }
-                // The title is the drag handle for reordering columns; the rest
-                // of the header is sliders and a knob that need their own drags.
-                .onDrag { NSItemProvider(object: "trackmove:\(track.id.uuidString)" as NSString) }
-                .help("\(track.name) — click to select, double-click to rename, drag to reorder. Right-click to delete this track.")
-        }
+            }
+            .onAppear { nameDraft = track.name }
+            .onChange(of: nameFieldFocused) { _, focused in
+                // Leaving the field without Return throws the edit away.
+                if !focused {
+                    nameDraft = track.name
+                    isEditingName = false
+                }
+            }
+            // Keep the field in step when the name changes elsewhere (undo,
+            // project load, demo set) while it isn't being edited.
+            .onChange(of: track.name) { _, name in
+                if !isEditingName { nameDraft = name }
+            }
+            .help("\(track.name) — double-click to rename, then press Return. Drag the header to reorder this track.")
     }
 
+    /// Enters edit mode, then focuses on the next runloop turn: the field only
+    /// accepts focus once it is hit-testable again, so setting both together
+    /// would drop the focus immediately.
     private func beginRenaming() {
         engine.selectTrack(track)
         nameDraft = track.name
         isEditingName = true
-        nameFieldFocused = true
+        DispatchQueue.main.async { nameFieldFocused = true }
     }
 
-    /// Applies the edited name (the engine rejects blank/unchanged names) and
-    /// leaves edit mode.
+    /// Applies the typed name on Return, then reflects whatever the engine
+    /// accepted (a blank entry leaves the old name in place).
     private func commitRename() {
-        guard isEditingName else { return }
-        isEditingName = false
         engine.renameTrack(track, to: nameDraft)
+        nameDraft = track.name
+        nameFieldFocused = false
+        isEditingName = false
     }
 
     /// Record-mode toggle for recording into an occupied cell, styled like
