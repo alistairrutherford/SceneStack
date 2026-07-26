@@ -97,7 +97,7 @@ struct ClipDetailBar: View {
                     .fill(Color.black.opacity(0.3))
                 // No `windowBars` override: a fixed take scales to the chosen
                 // REC BARS length, a free one to the shared 2-bar window.
-                LiveRecordingWaveform(color: Theme.coral, showsGrid: true)
+                LiveRecordingWaveform(color: Theme.coral, showsGrid: true, showsTimeScale: true)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 6)
             }
@@ -105,6 +105,18 @@ struct ClipDetailBar: View {
     }
 
     private func waveformView(clip: Clip, track: Track, color: Color) -> some View {
+        // The clip is warped to the project tempo, so its length in seconds is
+        // its bar count at the current tempo.
+        let seconds = Double(clip.loopBars * engine.beatsPerBar) * 60.0 / max(1, engine.tempo)
+
+        return VStack(spacing: 1) {
+            TimeScaleRuler(window: seconds)
+                .frame(height: 10)
+            clipWaveform(clip: clip, track: track, color: color)
+        }
+    }
+
+    private func clipWaveform(clip: Clip, track: Track, color: Color) -> some View {
         TimelineView(.animation) { _ in
             // Compute the play position here (per tick), OUTSIDE the
             // GeometryReader — a GeometryReader won't re-run its content on a

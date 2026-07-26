@@ -18,6 +18,9 @@ struct LiveRecordingWaveform: View {
     var color: Color = .white
     /// Draws bar/beat lines behind the waveform (used by the larger inspector).
     var showsGrid = false
+    /// Draws a numbered seconds ruler above the waveform. Inspector only — the
+    /// grid cell is far too small for legible labels.
+    var showsTimeScale = false
 
     /// Measured separately rather than read from a `GeometryReader` around the
     /// drawing: a GeometryReader only re-runs its content when a captured value
@@ -45,27 +48,38 @@ struct LiveRecordingWaveform: View {
                 bins: max(4, Int(Double(bins) * (scrolling ? 1 : fraction))),
                 lastSeconds: scrolling ? window : nil)
 
-            ZStack(alignment: .leading) {
-                if showsGrid {
-                    grid(beats: Int(windowBeats.rounded()))
-                } else if !scrolling {
-                    // Faint bed showing the space still to be filled.
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(Color.black.opacity(0.14))
-                        .frame(height: 2)
+            // Seconds at the left edge of the visible window. A scrolling free
+            // take shows the trailing window, so the scale counts up with it.
+            let windowStart = scrolling ? max(0, elapsed - window) : 0
+
+            VStack(spacing: 1) {
+                if showsTimeScale {
+                    TimeScaleRuler(start: windowStart, window: window)
+                        .frame(height: 10)
                 }
 
-                WaveformShape(peaks: peaks)
-                    .fill(color.opacity(0.9))
-                    .frame(width: drawnWidth)
+                ZStack(alignment: .leading) {
+                    if showsGrid {
+                        grid(beats: Int(windowBeats.rounded()))
+                    } else if !scrolling {
+                        // Faint bed showing the space still to be filled.
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(Color.black.opacity(0.14))
+                            .frame(height: 2)
+                    }
 
-                // Write head at the leading edge of the untouched space.
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: 1.5)
-                    .offset(x: max(0, drawnWidth - 1.5))
+                    WaveformShape(peaks: peaks)
+                        .fill(color.opacity(0.9))
+                        .frame(width: drawnWidth)
+
+                    // Write head at the leading edge of the untouched space.
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 1.5)
+                        .offset(x: max(0, drawnWidth - 1.5))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .allowsHitTesting(false)
