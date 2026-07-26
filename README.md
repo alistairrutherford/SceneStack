@@ -1,16 +1,16 @@
-# Stringstack
+# SceneStack
 
 A simple, colourful loop-based audio DAW for macOS, inspired by the **Session view** of Ableton Live. Build up a track by recording and launching audio loops in a clip grid, layer effects, and jam — all from a single screen.
 
-Stringstack is written in **SwiftUI** on top of **AVAudioEngine**, and hosts **Audio Unit (AU) effect plugins**.
+SceneStack is written in **SwiftUI** on top of **AVAudioEngine**, and hosts **Audio Unit (AU) effect plugins**.
 
-![Stringstack](screenshot.jpg)
+![SceneStack](screenshot.jpg)
 
 ---
 
 ## What it does
 
-Stringstack is organised around a **clip grid**: tracks are columns, scenes are rows, and each cell holds one audio loop.
+SceneStack is organised around a **clip grid**: tracks are columns, scenes are rows, and each cell holds one audio loop.
 
 - **Record loops** from the built-in microphone or any external Core Audio input, with a metronome and count-in.
 - **Launch clips** quantised to the bar, so everything you trigger stays in time.
@@ -19,7 +19,7 @@ Stringstack is organised around a **clip grid**: tracks are columns, scenes are 
 - **Add AU effects** to any track, with the plugin's own editor UI.
 - **Save** your work as a self-contained project you can reopen later.
 
-There is no linear arrangement/timeline — Stringstack is deliberately focused on the live, loop-launching clip view.
+There is no linear arrangement/timeline — SceneStack is deliberately focused on the live, loop-launching clip view.
 
 ---
 
@@ -33,10 +33,10 @@ There is no linear arrangement/timeline — Stringstack is deliberately focused 
 
 ## Building & running
 
-Open `Stringstack.xcodeproj` in Xcode and run, or from the command line:
+Open `SceneStack.xcodeproj` in Xcode and run, or from the command line:
 
 ```bash
-xcodebuild -project Stringstack.xcodeproj -scheme Stringstack -configuration Debug -allowProvisioningUpdates build
+xcodebuild -project SceneStack.xcodeproj -scheme SceneStack -configuration Debug -allowProvisioningUpdates build
 ```
 
 The first time you record, macOS will ask for **microphone permission** — approve it. On first launch the app loads a small **demo set** (drums, bass, keys, shaker) so there's something to play with immediately.
@@ -146,7 +146,7 @@ Effects process **after** the players and **before** the track fader/pan, so vol
 
 ## Projects
 
-Projects are saved as self-contained **`.stringstackproj`** bundles (a folder holding the settings plus a copy of every clip's audio).
+Projects are saved as self-contained **`.sts`** bundles (a folder holding the settings plus a copy of every clip's audio).
 
 - **New Project** — `⌘N` (prompts to save first if you have unsaved changes)
 - **Open** — `⌘O`
@@ -192,16 +192,16 @@ Input gain, metronome on/off, and metronome volume are remembered as app prefere
 Run the unit tests from Xcode (⌘U) or the command line:
 
 ```bash
-xcodebuild test -project Stringstack.xcodeproj -scheme Stringstack -destination 'platform=macOS'
+xcodebuild test -project SceneStack.xcodeproj -scheme SceneStack -destination 'platform=macOS'
 ```
 
-The `StringstackTests` target covers the pure, engine-independent logic — the
+The `SceneStackTests` target covers the pure, engine-independent logic — the
 transport/beat maths (`BeatMath`: launch quantisation, recorded-bar rounding,
 scene-reorder index mapping), host-time conversions (`HostClock`), buffer
 maths (`AudioUtil` mix/slice/convert and `Waveform` peaks), and the
-`.stringstackproj` Codable schema round-trip. This logic is deliberately
+`.sts` Codable schema round-trip. This logic is deliberately
 separated from the audio engine so the tests run fast and headless.
 
 ---
 
-*Stringstack — record, launch, layer, jam.* 🎛️
+*SceneStack — record, launch, layer, jam.* 🎛️

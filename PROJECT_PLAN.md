@@ -1,4 +1,4 @@
-# Project Plan — "Stringstack" (working title)
+# Project Plan — "SceneStack" (working title)
 ## A simple Ableton Live–style DAW for macOS
 
 **Platform:** macOS 14+ (Apple Silicon + Intel)
@@ -45,7 +45,7 @@ embedding quirks beyond what AUViewController gives us.
 | Metronome | `AVAudioSourceNode` (synthesised click) | Sample-accurate; no file loading; accent via pitch/gain |
 | Transport clock | Host-time based (`mach_absolute_time` / `AVAudioTime`) | Single source of truth; UI observes at 60 Hz via `TimelineView` |
 | AU hosting | `AVAudioUnitComponentManager` + `AVAudioUnit.instantiate` | Effects of type `aufx`; plugin UI via `requestViewController` wrapped in `NSViewControllerRepresentable` |
-| Persistence | Project bundle (`.stringstackproj` folder): `project.json` (Codable) + `Audio/` clip files | AU/VST state saved via `fullState` / component `getState` |
+| Persistence | Project bundle (`.sts` folder): `project.json` (Codable) + `Audio/` clip files | AU/VST state saved via `fullState` / component `getState` |
 | Waveforms | Precomputed peak files, drawn with SwiftUI `Canvas` | Background rendering on clip import/record |
 | UI | SwiftUI + `Observation` framework | AppKit escape hatches only for plugin windows |
 
@@ -172,7 +172,7 @@ Scene          { name, color }                          // a row in session view
   stretch goal; at minimum, linear recording onto tracks).
 - Mixer strips: fader, pan, mute/solo/arm, stereo level meters (tap-based,
   peak + RMS with decay animation).
-- Project save/load (`.stringstackproj` bundle), autosave, undo/redo via
+- Project save/load (`.sts` bundle), autosave, undo/redo via
   `UndoManager` on the model layer.
 - **Milestone: arrange, mix, save, reopen.**
 
@@ -246,7 +246,7 @@ AVAudioEngine.
 
 ## 9. Immediate next steps
 
-1. Phase 0: create the Xcode project (`Stringstack.app`), entitlements, engine
+1. Phase 0: create the Xcode project (`SceneStack.app`), entitlements, engine
    skeleton, play a test file.
 2. Build Phase 1's `TransportClock` + metronome first — everything else
    (count-in, quantised launch, recording alignment) hangs off that clock, so
