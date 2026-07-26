@@ -854,6 +854,12 @@ final class TransportEngine {
     // Implementations live in `RecordingController`; these thin forwarders keep
     // the engine's public API (and every UI call site) unchanged.
     var canRecord: Bool { recording.canRecord }
+    /// Live-waveform inputs for the cell being recorded into. Poll, don't observe.
+    var recordedBeats: Double { recording.recordedBeats }
+    var recordFixedLengthBeats: Double? { recording.fixedLengthBeats }
+    func liveRecordingWaveform(bins: Int, lastSeconds: Double? = nil) -> [Float] {
+        recorder.liveWaveform(bins: bins, lastSeconds: lastSeconds)
+    }
     func record() { recording.record() }
     func recordIntoSlot(_ track: Track, scene: Int) { recording.recordIntoSlot(track, scene: scene) }
     func finishRecordingAndPlay() { recording.finishRecordingAndPlay() }

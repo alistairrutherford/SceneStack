@@ -13,9 +13,19 @@ struct ClipDetailBar: View {
         return (track, clip)
     }
 
+    /// The track being recorded into, if any. While a take is in progress the
+    /// inspector follows it — the destination slot is still empty, so there is
+    /// no clip to select yet.
+    private var recordingTrack: Track? {
+        guard let slot = engine.recordingSlot else { return nil }
+        return engine.tracks.first { $0.id == slot.trackID }
+    }
+
     var body: some View {
         HStack(spacing: 14) {
-            if let (track, clip) = selection {
+            if let track = recordingTrack {
+                recordingView(track: track)
+            } else if let (track, clip) = selection {
                 let color = Theme.trackPalette[clip.colorIndex % Theme.trackPalette.count]
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -55,6 +65,36 @@ struct ClipDetailBar: View {
         RoundedRectangle(cornerRadius: 1)
             .fill(Color.white.opacity(0.08))
             .frame(width: 2, height: 40)
+    }
+
+    /// Inspector contents while a take is being captured: the live waveform,
+    /// over a bar grid of the target length when the length is fixed.
+    private func recordingView(track: Track) -> some View {
+        let bars = engine.recordFixedLengthBeats.map { Int($0) / max(1, engine.beatsPerBar) }
+
+        return Group {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(engine.isCountingIn ? "Counting in…" : "Recording")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.coral)
+                    .lineLimit(1)
+                Text("\(bars.map { "\($0) bar\($0 == 1 ? "" : "s")" } ?? "free") · \(track.name)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.dimmed)
+                    .lineLimit(1)
+            }
+            .frame(width: 110, alignment: .leading)
+
+            divider
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.black.opacity(0.3))
+                LiveRecordingWaveform(windowBars: 4, color: Theme.coral, showsGrid: true)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 6)
+            }
+        }
     }
 
     private func waveformView(clip: Clip, track: Track, color: Color) -> some View {

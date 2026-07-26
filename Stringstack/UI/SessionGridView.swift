@@ -769,8 +769,17 @@ private struct ClipCell: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isRecordingHere ? Theme.coral.opacity(0.85) : Theme.surface)
                 if isRecordingHere {
-                    RecordingIndicator(queued: engine.recordQueuedUntilBeat != nil,
-                                       countingIn: engine.isCountingIn)
+                    // Waiting to punch in (count-in or the next bar) shows the
+                    // pulsing indicator; once audio is actually being captured
+                    // it gives way to the live waveform.
+                    if engine.recordQueuedUntilBeat != nil || engine.isCountingIn {
+                        RecordingIndicator(queued: engine.recordQueuedUntilBeat != nil,
+                                           countingIn: engine.isCountingIn)
+                    } else {
+                        LiveRecordingWaveform()
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 7)
+                    }
                 } else if track.isArmed {
                     Circle()
                         .strokeBorder(Theme.coral.opacity(0.8), lineWidth: 2)

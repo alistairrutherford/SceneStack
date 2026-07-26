@@ -30,6 +30,16 @@ final class RecordingController {
         engine.recordingSlot == nil && (engine.selectedTrack?.isArmed ?? false)
     }
 
+    /// Beats captured so far in the take (negative during the count-in).
+    var recordedBeats: Double { engine.currentBeats - recordStartBeat }
+
+    /// The take's fixed length in beats, or nil when recording freely. Overdub
+    /// is always fixed to the source clip's length.
+    var fixedLengthBeats: Double? {
+        guard let bars = recordBarsOverride ?? engine.recordLengthBars else { return nil }
+        return Double(bars * engine.beatsPerBar)
+    }
+
     /// R key / record button: record into the selected track. Only available
     /// when the selected track is armed. Targets the selected cell on that
     /// track, or its first empty slot if no cell on it is selected.

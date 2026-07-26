@@ -18,6 +18,25 @@ final class RecordingService: @unchecked Sendable {
     /// Input gain applied to captured audio and reflected in the meter.
     private let gainBits = Atomic<UInt64>(1.0.bitPattern)
 
+    // MARK: - Live waveform
+
+    /// Peaks per second kept for the in-progress take's waveform. Fixed rate,
+    /// so the UI can map peaks to elapsed time without knowing the tap's buffer
+    /// size or the device's sample rate.
+    static let liveRate = 40.0
+    /// ~5 minutes at `liveRate`; a take longer than this drops its oldest peaks.
+    private static let maxLivePeaks = 12_000
+
+    /// Guarded by `lock`.
+    private var livePeaks: [Float] = []
+    /// Tap-thread only: the bucket being accumulated into the next peak.
+    private var bucketFrames = 0
+    private var bucketFilled = 0
+    private var bucketPeak: Float = 0
+    /// Set by `beginCapture`, consumed on the tap thread so the bucket state is
+    /// only ever mutated there.
+    private let resetLiveFlag = Atomic<Bool>(false)
+
     func setInputGain(_ gain: Double) {
         gainBits.store(max(0, gain).bitPattern, ordering: .relaxed)
     }
@@ -48,6 +67,7 @@ final class RecordingService: @unchecked Sendable {
             self.updatePeak(from: buffer, gain: gain)
             guard self.capturingFlag.load(ordering: .relaxed),
                   let copy = Self.copyBuffer(buffer, gain: gain) else { return }
+            self.appendLivePeaks(from: buffer, gain: gain)
             self.lock.lock()
             self.chunks.append((copy, when.hostTime))
             self.lock.unlock()
@@ -68,8 +88,36 @@ final class RecordingService: @unchecked Sendable {
     func beginCapture() {
         lock.lock()
         chunks.removeAll()
+        livePeaks.removeAll(keepingCapacity: true)
         lock.unlock()
+        resetLiveFlag.store(true, ordering: .relaxed)
         capturingFlag.store(true, ordering: .relaxed)
+    }
+
+    /// Peaks for the take in progress, downsampled to `bins`. `lastSeconds`
+    /// limits it to the trailing window — free-length recording scrolls once
+    /// the waveform fills the cell, while a fixed length shows the whole take.
+    func liveWaveform(bins: Int, lastSeconds: Double? = nil) -> [Float] {
+        guard bins > 0 else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+
+        var start = 0
+        if let lastSeconds {
+            let keep = max(1, Int(lastSeconds * Self.liveRate))
+            start = max(0, livePeaks.count - keep)
+        }
+        let count = livePeaks.count - start
+        guard count > 0 else { return [] }
+        if count <= bins { return Array(livePeaks[start...]) }
+
+        // Downsample by taking the loudest peak in each bin, so transients
+        // survive rather than being averaged away.
+        return (0..<bins).map { bin in
+            let from = start + bin * count / bins
+            let to = max(from + 1, start + (bin + 1) * count / bins)
+            return livePeaks[from..<to].max() ?? 0
+        }
     }
 
     func endCapture() {
@@ -140,6 +188,46 @@ final class RecordingService: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Buckets the tap buffer into fixed-duration peaks for the live waveform.
+    /// Runs on the audio thread, so it only takes the lock to append a finished
+    /// peak (`liveRate` times a second) rather than per buffer.
+    private func appendLivePeaks(from buffer: AVAudioPCMBuffer, gain: Float) {
+        guard let data = buffer.floatChannelData else { return }
+        if resetLiveFlag.exchange(false, ordering: .relaxed) {
+            bucketFilled = 0
+            bucketPeak = 0
+        }
+        let sampleRate = buffer.format.sampleRate
+        guard sampleRate > 0 else { return }
+        bucketFrames = max(1, Int(sampleRate / Self.liveRate))
+
+        let channels = Int(buffer.format.channelCount)
+        let frames = Int(buffer.frameLength)
+        var index = 0
+        while index < frames {
+            let take = min(bucketFrames - bucketFilled, frames - index)
+            var peak: Float = 0
+            for channel in 0..<channels {
+                var channelPeak: Float = 0
+                vDSP_maxmgv(data[channel] + index, 1, &channelPeak, vDSP_Length(take))
+                peak = max(peak, channelPeak)
+            }
+            bucketPeak = max(bucketPeak, min(1, peak * gain))
+            bucketFilled += take
+            index += take
+
+            guard bucketFilled >= bucketFrames else { continue }
+            lock.lock()
+            livePeaks.append(bucketPeak)
+            if livePeaks.count > Self.maxLivePeaks {
+                livePeaks.removeFirst(livePeaks.count - Self.maxLivePeaks)
+            }
+            lock.unlock()
+            bucketFilled = 0
+            bucketPeak = 0
+        }
+    }
 
     private func updatePeak(from buffer: AVAudioPCMBuffer, gain: Float) {
         guard let data = buffer.floatChannelData else { return }
