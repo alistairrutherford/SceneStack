@@ -35,9 +35,10 @@ final class Track: Identifiable {
 ///
 /// A clip owns its immutable `sourceBuffer` — `loopBars` bars of audio at its
 /// `nativeTempo` — plus a derived `buffer` used for playback. When the project
-/// tempo differs from `nativeTempo` the source is resampled (warped) so the
-/// loop still spans exactly `loopBars` bars at the current tempo instead of
-/// drifting. This is the simple, pitch-shifting version of tempo-follow.
+/// tempo differs from `nativeTempo` the source is warped so the loop still
+/// spans exactly `loopBars` bars at the current tempo instead of drifting.
+/// The warp is a **pitch-preserving time-stretch** (Ableton-style), falling
+/// back to plain resampling only if the stretcher can't run.
 @MainActor
 @Observable
 final class Clip: Identifiable {
@@ -76,14 +77,17 @@ final class Clip: Identifiable {
 
     /// Warps `buffer` so the loop spans `loopBars` bars at `tempo`. Frame count
     /// scales by `nativeTempo / tempo`; at (near) the native tempo the source is
-    /// reused untouched.
+    /// reused untouched. Uses a pitch-preserving time-stretch, falling back to
+    /// resampling if the stretcher is unavailable.
     func applyTempo(_ tempo: Double) {
         guard tempo > 0, abs(tempo - nativeTempo) > 0.01 else {
             buffer = sourceBuffer
             return
         }
         let targetFrames = Int((Double(sourceBuffer.frameLength) * nativeTempo / tempo).rounded())
-        buffer = AudioUtil.resample(sourceBuffer, toFrames: targetFrames) ?? sourceBuffer
+        buffer = AudioUtil.timeStretch(sourceBuffer, toFrames: targetFrames)
+            ?? AudioUtil.resample(sourceBuffer, toFrames: targetFrames)
+            ?? sourceBuffer
     }
 }
 

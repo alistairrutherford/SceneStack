@@ -87,9 +87,24 @@ final class TransportEngine {
             let clamped = min(max(tempo.rounded(), 20), 300)
             if clamped != tempo { tempo = clamped; return }
             guard tempo != oldValue else { return }
-            metronome.setTempo(tempo)
-            warpClipsToCurrentTempo()
+            metronome.setTempo(tempo)   // clock/metronome follow instantly
+            scheduleWarp()              // the costly clip re-warp is debounced
             markDirty()
+        }
+    }
+
+    /// Pitch-preserving clip warping is a per-clip offline render, far too heavy
+    /// to run on every step of a tempo drag. The metronome tracks tempo live;
+    /// the warp waits for the tempo to settle. Until it fires, playing loops
+    /// briefly drift, then snap back into phase when the re-warp reschedules them.
+    @ObservationIgnored private var warpDebounce: Task<Void, Never>?
+
+    private func scheduleWarp() {
+        warpDebounce?.cancel()
+        warpDebounce = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.warpClipsToCurrentTempo()
         }
     }
 

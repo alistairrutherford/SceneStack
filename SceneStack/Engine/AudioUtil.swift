@@ -93,6 +93,90 @@ enum AudioUtil {
         return output
     }
 
+    /// Time-stretches `buffer` to exactly `targetFrames` frames **keeping the
+    /// pitch constant** (the Ableton-style warp), using Apple's offline
+    /// `AVAudioUnitTimePitch`. Returns nil if the stretcher can't run so the
+    /// caller can fall back to `resample`.
+    ///
+    /// Loop-seam handling: the source is rendered *looped*, and a
+    /// `targetFrames`-long window is taken from the steady state (past the
+    /// stretcher's priming ramp). Because the looped, stretched output is
+    /// periodic with period `targetFrames`, that window is exactly one loop
+    /// cycle whose end meets its start — so it loops without a seam click.
+    static func timeStretch(_ buffer: AVAudioPCMBuffer, toFrames targetFrames: Int) -> AVAudioPCMBuffer? {
+        guard targetFrames > 0 else { return nil }
+        let sourceFrames = Int(buffer.frameLength)
+        guard sourceFrames > 1 else { return nil }
+
+        let format = buffer.format
+        // rate > 1 → faster/shorter output; must sit in the AU's valid range.
+        let rate = Double(sourceFrames) / Double(targetFrames)
+        guard rate >= 1.0 / 32, rate <= 32 else { return nil }
+
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        let timePitch = AVAudioUnitTimePitch()
+        timePitch.rate = Float(rate)   // pitch left at 0 cents → pitch preserved
+        engine.attach(player)
+        engine.attach(timePitch)
+        engine.connect(player, to: timePitch, format: format)
+        engine.connect(timePitch, to: engine.mainMixerNode, format: format)
+
+        let maxFrames: AVAudioFrameCount = 4096
+        do {
+            try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: maxFrames)
+            try engine.start()
+        } catch {
+            return nil
+        }
+        defer { engine.stop() }
+
+        player.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
+        player.play()
+
+        // Skip past the stretcher's priming ramp so the window is steady-state.
+        let latencyFrames = Int((timePitch.latency) * format.sampleRate)
+        let skip = latencyFrames + 4096
+        let totalToRender = skip + targetFrames
+
+        guard let out = AVAudioPCMBuffer(pcmFormat: format,
+                                         frameCapacity: AVAudioFrameCount(targetFrames)),
+              let render = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: maxFrames) else {
+            return nil
+        }
+        out.frameLength = AVAudioFrameCount(targetFrames)
+        let channels = Int(format.channelCount)
+
+        var rendered = 0
+        var written = 0
+        while rendered < totalToRender, written < targetFrames {
+            let need = min(Int(maxFrames), totalToRender - rendered)
+            let status = (try? engine.renderOffline(AVAudioFrameCount(need), to: render)) ?? .error
+            guard status == .success, render.frameLength > 0 else { break }
+            let got = Int(render.frameLength)
+            for local in 0..<got {
+                let absolute = rendered + local
+                if absolute < skip { continue }
+                if written >= targetFrames { break }
+                for channel in 0..<channels {
+                    out.floatChannelData![channel][written] = render.floatChannelData![channel][local]
+                }
+                written += 1
+            }
+            rendered += got
+        }
+
+        guard written > 0 else { return nil }
+        // Pad any shortfall by wrapping, so the loop length stays exact.
+        if written < targetFrames {
+            for channel in 0..<channels {
+                let data = out.floatChannelData![channel]
+                for frame in written..<targetFrames { data[frame] = data[frame % written] }
+            }
+        }
+        return out
+    }
+
     /// Copies `frames` frames starting at `start` into a new buffer.
     static func slice(_ buffer: AVAudioPCMBuffer, from start: Int, frames: Int) -> AVAudioPCMBuffer? {
         guard frames > 0, start >= 0, start + frames <= Int(buffer.frameLength),
