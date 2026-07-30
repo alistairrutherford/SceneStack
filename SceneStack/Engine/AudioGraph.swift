@@ -19,10 +19,54 @@ final class AudioGraph {
     /// Non-nil after a failed `start()`; surfaced by the coordinator.
     private(set) var startError: String?
 
+    /// Called when the audio hardware changes under the engine — headphones
+    /// plugged in or pulled out, an interface connected, the default device
+    /// switched. AVAudioEngine stops itself and drops its I/O connections when
+    /// this happens, so someone has to put the graph back together.
+    @ObservationIgnored var onConfigurationChange: (() -> Void)?
+    private var configurationObserver: NSObjectProtocol?
+
+    /// The metronome/clock source, kept so it can be reconnected after a
+    /// configuration change.
+    private var sourceNode: AVAudioSourceNode?
+
     init() {
         var sampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
         if sampleRate <= 0 { sampleRate = 44100 }
         standardFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onConfigurationChange?() }
+        }
+    }
+
+    deinit {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+    }
+
+    /// Re-makes every connection the engine may have dropped when the hardware
+    /// changed. Connections carrying `standardFormat` are unaffected by the new
+    /// device, but anything meeting the master mixer follows the hardware
+    /// format and has to be rebuilt.
+    func reconnectAfterConfigurationChange(effects: [UUID: [EffectInstance]]) {
+        if let sourceNode {
+            engine.connect(sourceNode, to: engine.mainMixerNode, format: nil)
+        }
+        for (id, channel) in channels {
+            engine.connect(channel.players[0], to: channel.inputMixer, format: standardFormat)
+            engine.connect(channel.players[1], to: channel.inputMixer, format: standardFormat)
+            engine.connect(channel.mixer, to: engine.mainMixerNode, format: nil)
+            rebuildChain(for: id, effects: effects[id] ?? [])
+            channel.meter.install(on: channel.mixer)
+        }
+        // The monitor route ran from the old input node; forget it so the
+        // coordinator rewires rather than believing it survived.
+        monitoredTrackID = nil
+        installMasterMeter()
     }
 
     var sampleRate: Double { standardFormat.sampleRate }
@@ -63,6 +107,7 @@ final class AudioGraph {
     func attachSource(_ node: AVAudioSourceNode) {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: nil)
+        sourceNode = node
     }
 
     func installMasterMeter() { masterMeter.install(on: engine.mainMixerNode) }

@@ -300,6 +300,10 @@ final class TransportEngine {
             self?.handleDeviceListChange()
         }
 
+        graph.onConfigurationChange = { [weak self] in
+            self?.handleAudioConfigurationChange()
+        }
+
         loadPreferences()
 
         // Every launch starts on a blank project — no previous project is
@@ -1204,6 +1208,36 @@ final class TransportEngine {
     }
 
     // MARK: - Devices
+
+    /// The audio hardware changed under us — headphones in or out, an interface
+    /// connected, the default device switched.
+    ///
+    /// AVAudioEngine stops itself and drops its I/O connections when this
+    /// happens. Left alone the app looks dead afterwards: nothing plays and
+    /// nothing records, because the graph is still attached but no longer
+    /// wired to any hardware. So: stop cleanly, rebuild the connections,
+    /// restart, and say what happened rather than failing silently.
+    private func handleAudioConfigurationChange() {
+        let wasRunning = mode != .stopped
+        let wasRecording = mode == .recording
+        stop()
+
+        var effects: [UUID: [EffectInstance]] = [:]
+        for track in tracks { effects[track.id] = track.effects }
+        graph.reconnectAfterConfigurationChange(effects: effects)
+
+        // The input node belongs to the old device; it has to be brought up
+        // again before it can be recorded from or monitored.
+        input.invalidate()
+        startEngine()
+        applyMonitoring()
+
+        statusMessage = wasRecording
+            ? "Audio device changed — recording stopped. Re-arm the track to continue."
+            : wasRunning
+              ? "Audio device changed — playback stopped. Press play to continue."
+              : "Audio device changed."
+    }
 
     private func handleDeviceListChange() {
         guard mode == .recording,

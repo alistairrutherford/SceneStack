@@ -78,6 +78,22 @@ final class ClipLauncher {
         }
     }
 
+    /// Starts the rest of a scene playing underneath a take that is beginning
+    /// from stopped — every clip in `scene` except the one being recorded into.
+    ///
+    /// They are anchored to the same `hostTime` as the recording's bar 1, so
+    /// they come in exactly when the count-in ends and the take is captured
+    /// against them. Without this, recording from a stopped transport gives you
+    /// a count-in and then silence to play along to; whether you heard the rest
+    /// of the scene depended entirely on having pressed play beforehand.
+    func launchSceneUnderRecording(_ scene: Int, startingAt boundary: Double,
+                                   hostTime: UInt64, excluding trackID: UUID) {
+        for track in engine.tracks where track.id != trackID {
+            guard scene < track.slots.count, let clip = track.slots[scene] else { continue }
+            scheduleLaunch(clip: clip, on: track, boundary: boundary, hostTime: hostTime)
+        }
+    }
+
     private func scheduleLaunch(clip: Clip, on track: Track, boundary: Double, hostTime: UInt64) {
         guard let channel = engine.graph.channel(for: track.id) else { return }
 

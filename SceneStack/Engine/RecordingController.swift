@@ -186,6 +186,11 @@ final class RecordingController {
         engine.recordingSlot = SlotRef(trackID: track.id, scene: scene)
         engine.mode = .recording
         engine.metronome.setClickSuppressed(true)
+        // Play the rest of the scene under the take. Recording is a performance
+        // against what is already there, so this doesn't depend on the
+        // monitoring switch — that only governs whether you hear *yourself*.
+        engine.launcher.launchSceneUnderRecording(scene, startingAt: recordStartBeat,
+                                                  hostTime: beat0Host, excluding: track.id)
         scheduleRecordAutoStop()
         scheduleReplaceClear(atBeat: recordStartBeat)
     }

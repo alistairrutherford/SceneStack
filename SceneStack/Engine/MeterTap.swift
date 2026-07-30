@@ -14,6 +14,9 @@ final class MeterTap: @unchecked Sendable {
     }
 
     func install(on node: AVAudioNode) {
+        // A bus takes only one tap, and this is re-installed after a hardware
+        // configuration change; removing first is a no-op when there is none.
+        node.removeTap(onBus: 0)
         let format = node.outputFormat(forBus: 0)
         node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self, let data = buffer.floatChannelData, buffer.frameLength > 0 else { return }

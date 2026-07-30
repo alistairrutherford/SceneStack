@@ -22,6 +22,14 @@ removed** to focus the app on the loop-launching clip view.
 ### Recording
 - Records from the built-in mic by default; external Core Audio inputs via a
   device picker, with hot-plug handling and a robust input bring-up sequence.
+- **The rest of the scene plays under the take.** Recording from a stopped
+  transport launches the other clips in that scene row, anchored to the take's
+  bar 1, so you perform against what's already there. Independent of the
+  monitoring switch, which only governs hearing *yourself*.
+- **Survives an audio device change** (headphones in/out, interface swapped):
+  AVAudioEngine stops itself and drops its I/O connections, so the graph is
+  rebuilt, the engine restarted, and the transport stopped with an explanation
+  rather than going silently dead.
 - Arm-gated (record button greys out unless the selected track is armed);
   count-in from stopped, bar-quantised punch-in while rolling.
 - **REC BARS** fixed length (1/2/4/8) or **Free** (default) — fixed takes
@@ -112,7 +120,7 @@ isolated behind SwiftUI modifiers in `AppKitSupport` / `PluginWindows`.
 
 ## Tests
 
-`SceneStackTests` — **76 tests**, run headless:
+`SceneStackTests` — **83 tests**, run headless:
 
 ```bash
 xcodebuild test -project SceneStack.xcodeproj -scheme SceneStack -destination 'platform=macOS'
@@ -165,6 +173,10 @@ can't be checked any other way:
   rule and prove the graph is wired to the right channel and torn down cleanly,
   but a granted microphone permission is needed to confirm sound actually
   arrives — verify by ear, on headphones, before relying on it.
+- After a device change the graph is rebuilt but `standardFormat` is still the
+  sample rate captured at launch, so clips and the metronome keep their original
+  rate and the engine converts at the output. Correct, but a device running at a
+  different rate costs an extra conversion.
 - AU effects only (no VST); one recording input at a time.
 - No export/bounce, and no master insert chain or aux sends — the other two
   gaps from the same review as input monitoring.
