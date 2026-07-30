@@ -28,7 +28,6 @@ struct TransportBar: View {
             tempoControl
             divider
             timeSignatureMenu
-            countInMenu
             recordLengthMenu
             quantizeMenu
             divider
@@ -230,7 +229,7 @@ struct TransportBar: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Time signature & count-in
+    // MARK: - Time signature
 
     private var timeSignatureMenu: some View {
         Menu {
@@ -251,29 +250,6 @@ struct TransportBar: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Time signature")
-    }
-
-    private var countInMenu: some View {
-        Menu {
-            ForEach([0, 1, 2, 4], id: \.self) { bars in
-                Button(bars == 0 ? "None" : "\(bars) bar\(bars == 1 ? "" : "s")") {
-                    engine.countInBars = bars
-                }
-            }
-        } label: {
-            VStack(spacing: 0) {
-                Text(engine.countInBars == 0 ? "off" : "\(engine.countInBars)")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.amber)
-                Text("COUNT-IN")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Theme.dimmed)
-            }
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Count-in length before recording")
     }
 
     private var recordLengthMenu: some View {
@@ -319,10 +295,16 @@ struct TransportBar: View {
         .help("Clip launch quantisation")
     }
 
-    // MARK: - Metronome
+    // MARK: - Count-in & metronome
 
+    /// The count-in sits with the metronome rather than with the other menus:
+    /// it's the click that counts you in, so they read as one group. It leads
+    /// the group so the metronome's on/off button and its volume slider stay
+    /// adjacent to each other.
     private func metronomeControls(volume: Binding<Double>) -> some View {
         HStack(spacing: 10) {
+            countInMenu
+
             TransportButton(
                 systemImage: "metronome.fill",
                 isActive: engine.metronomeEnabled,
@@ -337,6 +319,29 @@ struct TransportBar: View {
                 .tint(Theme.cyan)
                 .help("Metronome volume")
         }
+    }
+
+    private var countInMenu: some View {
+        Menu {
+            ForEach([0, 1, 2, 4], id: \.self) { bars in
+                Button(bars == 0 ? "None" : "\(bars) bar\(bars == 1 ? "" : "s")") {
+                    engine.countInBars = bars
+                }
+            }
+        } label: {
+            VStack(spacing: 0) {
+                Text(engine.countInBars == 0 ? "off" : "\(engine.countInBars)")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.amber)
+                Text("COUNT-IN")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Theme.dimmed)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Count-in length before recording")
     }
 }
 
