@@ -86,6 +86,9 @@ final class AudioInputController {
         graph.stop()
         recorder.removeTap(from: input)
         graph.reset()
+        // The reset drops the monitor route; forget it so the coordinator
+        // rewires rather than believing it is still connected.
+        graph.invalidateMonitoring()
         if setDevice {
             try devices.applySelectedDevice(to: input)
         }

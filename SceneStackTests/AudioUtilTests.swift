@@ -109,4 +109,65 @@ final class AudioUtilTests: XCTestCase {
         // Halving the rate ≈ halves the frame count (allow converter slack).
         XCTAssertLessThanOrEqual(abs(Int(out.frameLength) - 24000), 128)
     }
+
+    // MARK: - fadeOutTail (ending a clip on a boundary without a click)
+
+    func testFadeTailStartsAtFullLevelFromTheGivenFrame() throws {
+        // Full level on the first frame is what makes the tail continuous with
+        // the loop it replaces — any attenuation there is itself a step.
+        let out = try XCTUnwrap(AudioUtil.fadeOutTail(buffer([0.1, 0.2, 0.3, 0.4]),
+                                                      fromFrame: 2, frames: 2))
+        XCTAssertEqual(out.frameLength, 2)
+        XCTAssertEqual(channelSamples(out)[0], 0.3, accuracy: 1e-6)
+    }
+
+    func testFadeTailDecaysToNearSilence() throws {
+        let frames = 64
+        let out = try XCTUnwrap(AudioUtil.fadeOutTail(
+            buffer(Array(repeating: 1.0, count: frames)), fromFrame: 0, frames: frames))
+        let samples = channelSamples(out)
+
+        XCTAssertEqual(try XCTUnwrap(samples.first), 1.0, accuracy: 1e-6)
+        XCTAssertLessThan(try XCTUnwrap(samples.last), 0.02)
+        // Monotonic decay: a non-monotonic envelope would be audible as a bump.
+        for (earlier, later) in zip(samples, samples.dropFirst()) {
+            XCTAssertGreaterThan(earlier, later)
+        }
+    }
+
+    func testFadeTailWrapsAroundTheLoop() throws {
+        // Ending near the end of a loop has to continue into its start — the
+        // buffer is a loop, so that is the audio that would have played next.
+        let out = try XCTUnwrap(AudioUtil.fadeOutTail(buffer([1, 2, 3, 4]),
+                                                      fromFrame: 3, frames: 4))
+        // Values are ramped, so compare the underlying sequence 4,1,2,3 by
+        // dividing the gain back out.
+        let samples = channelSamples(out)
+        let recovered = samples.enumerated().map { index, value in
+            value / (Float(4 - index) / 4.0)
+        }
+        assertClose(recovered, [4, 1, 2, 3])
+    }
+
+    func testFadeTailHandlesOutOfRangeStartFrames() throws {
+        // Offsets are derived from beat maths and can land past the buffer or
+        // (with a boundary behind the clock) below zero.
+        let past = try XCTUnwrap(AudioUtil.fadeOutTail(buffer([1, 2, 3, 4]),
+                                                       fromFrame: 6, frames: 1))
+        XCTAssertEqual(channelSamples(past)[0], 3, accuracy: 1e-6)
+        let negative = try XCTUnwrap(AudioUtil.fadeOutTail(buffer([1, 2, 3, 4]),
+                                                           fromFrame: -1, frames: 1))
+        XCTAssertEqual(channelSamples(negative)[0], 4, accuracy: 1e-6)
+    }
+
+    func testFadeTailRejectsDegenerateRequests() {
+        XCTAssertNil(AudioUtil.fadeOutTail(buffer([1, 2, 3]), fromFrame: 0, frames: 0))
+    }
+
+    func testFadeTailIsStereoAware() throws {
+        let out = try XCTUnwrap(AudioUtil.fadeOutTail(buffer([0.5, 0.5], channels: 2),
+                                                      fromFrame: 0, frames: 2))
+        XCTAssertEqual(out.format.channelCount, 2)
+        XCTAssertEqual(channelSamples(out, channel: 1)[0], 0.5, accuracy: 1e-6)
+    }
 }

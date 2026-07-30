@@ -103,23 +103,42 @@ enum ProjectStore {
 
     // MARK: - Writing
 
+    /// Writes the project to `url`.
+    ///
+    /// The bundle is built in a staging directory on the destination's own
+    /// volume and only swapped into place once it is complete, so a failure
+    /// part-way through (disk full, an unencodable clip, a crash) leaves the
+    /// existing project untouched. Writing in place would mean deleting the
+    /// user's only copy before its replacement exists.
     @MainActor
     static func write(engine: TransportEngine, to url: URL) throws {
         let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: url.path) {
-            try fileManager.removeItem(at: url)
-        }
-        let audioDirectory = url.appendingPathComponent("Audio", isDirectory: true)
+        let staging = try stagingDirectory(for: url)
+        defer { try? fileManager.removeItem(at: staging) }
+
+        let staged = staging.appendingPathComponent(url.lastPathComponent)
+        let audioDirectory = staged.appendingPathComponent("Audio", isDirectory: true)
         try fileManager.createDirectory(at: audioDirectory, withIntermediateDirectories: true)
 
+        let existingAudio = url.appendingPathComponent("Audio", isDirectory: true)
         var clipDatas: [ClipData] = []
         for clip in engine.allClips() {
             let filename = "\(clip.id.uuidString).caf"
-            // Persist the un-warped source so the clip re-warps from the same
-            // audio to whatever tempo the project opens at.
-            let file = try AVAudioFile(forWriting: audioDirectory.appendingPathComponent(filename),
-                                       settings: clip.sourceBuffer.format.settings)
-            try file.write(from: clip.sourceBuffer)
+            let destination = audioDirectory.appendingPathComponent(filename)
+            let existing = existingAudio.appendingPathComponent(filename)
+            // A clip's source audio is immutable and the filename is the clip's
+            // id, so a file already in the bundle holds exactly this clip's
+            // audio — copy it forward rather than re-encoding. Without this,
+            // autosave re-encodes every clip in the set every two minutes.
+            if fileManager.fileExists(atPath: existing.path) {
+                try fileManager.copyItem(at: existing, to: destination)
+            } else {
+                // Persist the un-warped source so the clip re-warps from the
+                // same audio to whatever tempo the project opens at.
+                let file = try AVAudioFile(forWriting: destination,
+                                           settings: clip.sourceBuffer.format.settings)
+                try file.write(from: clip.sourceBuffer)
+            }
             clipDatas.append(ClipData(id: clip.id, name: clip.name, colorIndex: clip.colorIndex,
                                       loopBars: clip.loopBars, audioFile: filename,
                                       nativeTempo: clip.nativeTempo))
@@ -156,8 +175,34 @@ enum ProjectStore {
                                   clips: clipDatas, tracks: trackDatas)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(project).write(to: url.appendingPathComponent("project.json"))
+        try encoder.encode(project).write(to: staged.appendingPathComponent("project.json"))
+
+        try swapIntoPlace(staged: staged, at: url)
         engine.markSaved()
+    }
+
+    /// A scratch directory in which to build a replacement for the bundle at
+    /// `url`. Asking for it relative to the destination's *parent* (which
+    /// always exists, unlike the bundle on a first save) puts it on the
+    /// destination's own volume, so the final swap is a move rather than a
+    /// second full copy.
+    static func stagingDirectory(for url: URL) throws -> URL {
+        try FileManager.default.url(for: .itemReplacementDirectory,
+                                    in: .userDomainMask,
+                                    appropriateFor: url.deletingLastPathComponent(),
+                                    create: true)
+    }
+
+    /// Moves a fully-written staged bundle onto `url`, replacing whatever is
+    /// there. `replaceItemAt` needs something to replace, so a first save (no
+    /// existing bundle) is a plain move. Both consume `staged`.
+    static func swapIntoPlace(staged: URL, at url: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) {
+            _ = try fileManager.replaceItemAt(url, withItemAt: staged)
+        } else {
+            try fileManager.moveItem(at: staged, to: url)
+        }
     }
 
     // MARK: - Replacing the current session

@@ -45,4 +45,55 @@ final class ClipWarpTests: XCTestCase {
         c.applyTempo(120)
         XCTAssertTrue(c.buffer === c.sourceBuffer, "returning to native reuses the source")
     }
+
+    func testAsyncWarpMatchesTheSynchronousOne() async {
+        let sync = clip(frames: 24_000, nativeTempo: 120)
+        let async = clip(frames: 24_000, nativeTempo: 120)
+        sync.applyTempo(90)
+        await async.warp(to: 90)
+        XCTAssertEqual(Int(async.buffer.frameLength), Int(sync.buffer.frameLength))
+    }
+
+    func testAsyncWarpAtNativeTempoUsesSourceUntouched() async {
+        let c = clip(frames: 24_000, nativeTempo: 120)
+        await c.warp(to: 120)
+        XCTAssertTrue(c.buffer === c.sourceBuffer)
+    }
+
+    // MARK: - warp cache
+
+    func testRepeatingATempoReusesTheCachedWarp() {
+        // Re-rendering costs tens of milliseconds, so a tempo the clip has
+        // already been warped to must come back as the identical buffer.
+        let c = clip(frames: 24_000, nativeTempo: 120)
+        c.applyTempo(132)
+        let firstWarp = c.buffer
+        c.applyTempo(120)
+        XCTAssertTrue(c.buffer === c.sourceBuffer)
+        c.applyTempo(132)
+        XCTAssertTrue(c.buffer === firstWarp, "returning to 132 should reuse the cached render")
+    }
+
+    func testAsyncWarpSharesTheCacheWithTheSynchronousOne() async {
+        let c = clip(frames: 24_000, nativeTempo: 120)
+        c.applyTempo(132)
+        let firstWarp = c.buffer
+        c.applyTempo(120)
+        await c.warp(to: 132)
+        XCTAssertTrue(c.buffer === firstWarp, "both entry points share one cache")
+    }
+
+    func testCacheIsBoundedSoClipsDoNotGrowWithoutLimit() {
+        // Each entry costs as much memory as the clip's audio, so the cache
+        // holds only the most recent couple of tempos.
+        let c = clip(frames: 24_000, nativeTempo: 120)
+        c.applyTempo(132)
+        let oldest = c.buffer
+        c.applyTempo(140)
+        c.applyTempo(150)
+        c.applyTempo(132)
+        XCTAssertFalse(c.buffer === oldest, "the oldest entry should have been evicted")
+        XCTAssertEqual(Int(c.buffer.frameLength), Int(oldest.frameLength),
+                       "but a re-render still produces the same length")
+    }
 }

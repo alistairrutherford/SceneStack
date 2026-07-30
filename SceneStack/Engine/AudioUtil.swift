@@ -1,5 +1,16 @@
 import AVFoundation
 
+/// Carries an audio buffer across an isolation boundary.
+///
+/// `AVAudioPCMBuffer` isn't `Sendable`, but the buffers sent through here are
+/// safe to move: a clip's source audio is immutable once created, and a warp
+/// result is freshly rendered with no other reference to it until the main
+/// actor takes ownership.
+struct AudioBufferBox: @unchecked Sendable {
+    let buffer: AVAudioPCMBuffer
+    init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+}
+
 enum AudioUtil {
     /// Converts a buffer to the given format (sample rate / channel count),
     /// returning the original if it already matches.
@@ -175,6 +186,39 @@ enum AudioUtil {
             }
         }
         return out
+    }
+
+    /// A short fade-to-silence lifted from `buffer` starting at `startFrame`,
+    /// wrapping at the end (these buffers are loops, so the audio after the
+    /// last frame is the first).
+    ///
+    /// Scheduled with `.interrupts` at a launch/stop boundary this ends a
+    /// looping clip *on* the beat: the fade begins at full level, so it picks
+    /// up exactly where the loop was, and decays over a few milliseconds
+    /// instead of cutting mid-waveform the way `stop()` does.
+    static func fadeOutTail(_ buffer: AVAudioPCMBuffer,
+                            fromFrame startFrame: Int,
+                            frames: Int) -> AVAudioPCMBuffer? {
+        let sourceFrames = Int(buffer.frameLength)
+        guard frames > 0, sourceFrames > 0,
+              let source = buffer.floatChannelData,
+              let output = AVAudioPCMBuffer(pcmFormat: buffer.format,
+                                            frameCapacity: AVAudioFrameCount(frames)),
+              let destination = output.floatChannelData else { return nil }
+        output.frameLength = AVAudioFrameCount(frames)
+
+        // Wrap into range for any start frame, including a negative one.
+        let start = ((startFrame % sourceFrames) + sourceFrames) % sourceFrames
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let src = source[channel]
+            let dst = destination[channel]
+            for frame in 0..<frames {
+                // Full level on the first frame → continuous with the loop.
+                let gain = Float(frames - frame) / Float(frames)
+                dst[frame] = src[(start + frame) % sourceFrames] * gain
+            }
+        }
+        return output
     }
 
     /// Copies `frames` frames starting at `start` into a new buffer.

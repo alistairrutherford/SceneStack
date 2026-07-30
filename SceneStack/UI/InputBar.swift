@@ -8,13 +8,14 @@ struct InputBar: View {
         @Bindable var engine = engine
         return HStack(spacing: 14) {
             inputPicker
+            monitorToggle
             VStack(spacing: 5) {
                 LevelMeter()
                 Slider(value: $engine.inputGain, in: 0...2)
                     .controlSize(.mini)
                     .frame(width: 110)
                     .tint(Theme.cyan)
-                    .help("Input level — gain applied to recorded audio")
+                    .help("Input level — gain applied to recorded audio and to monitoring")
             }
             divider
             hint
@@ -28,6 +29,29 @@ struct InputBar: View {
                 .fill(Theme.surface)
                 .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
         )
+    }
+
+    /// Live input monitoring through the armed track's channel. Off by
+    /// default — on speakers an open mic feeds back — so the button reads as
+    /// inactive until deliberately switched on.
+    private var monitorToggle: some View {
+        Button {
+            engine.toggleMonitoring()
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: engine.monitorInput ? "headphones.circle.fill" : "headphones")
+                    .font(.system(size: 15, weight: .bold))
+                Text("MON")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(engine.monitorInput ? Theme.cyan : Theme.dimmed)
+            .frame(width: 34)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(engine.monitorInput
+              ? "Input monitoring on — the armed track's input plays through its effects and fader. Use headphones: on speakers this feeds back."
+              : "Hear live input through the armed track's effects and fader. Use headphones — on speakers an open mic feeds back.")
     }
 
     private var divider: some View {

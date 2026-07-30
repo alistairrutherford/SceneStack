@@ -75,19 +75,85 @@ final class Clip: Identifiable {
         self.detailWaveform = Waveform.peaks(for: buffer, bins: 480)
     }
 
+    /// Recent warp results, keyed by the frame count they were rendered to.
+    /// A render costs tens of milliseconds, and tempo editing revisits the same
+    /// values constantly (nudge up, nudge back, A/B two tempos), so the
+    /// previous result is worth keeping. Capped tightly: each entry costs as
+    /// much memory as the clip's audio.
+    @ObservationIgnored private var warpCache: [(frames: Int, buffer: AVAudioPCMBuffer)] = []
+    private static let warpCacheLimit = 2
+
+    /// The frame count this clip's loop has to occupy at `tempo`, or nil when
+    /// the source already fits — i.e. at (or within a hair of) its native tempo.
+    private func targetFrames(for tempo: Double) -> Int? {
+        guard tempo > 0, abs(tempo - nativeTempo) > 0.01 else { return nil }
+        return Int((Double(sourceBuffer.frameLength) * nativeTempo / tempo).rounded())
+    }
+
     /// Warps `buffer` so the loop spans `loopBars` bars at `tempo`. Frame count
     /// scales by `nativeTempo / tempo`; at (near) the native tempo the source is
     /// reused untouched. Uses a pitch-preserving time-stretch, falling back to
     /// resampling if the stretcher is unavailable.
+    ///
+    /// Renders inline, so the caller waits. That's the right trade when a clip
+    /// is being created (recorded, imported, loaded, duplicated) and can't be
+    /// used until it's warped — but not for a tempo change, which re-warps
+    /// every clip in the session at once. Use ``warp(to:)`` for that.
     func applyTempo(_ tempo: Double) {
-        guard tempo > 0, abs(tempo - nativeTempo) > 0.01 else {
+        guard let frames = targetFrames(for: tempo) else {
             buffer = sourceBuffer
             return
         }
-        let targetFrames = Int((Double(sourceBuffer.frameLength) * nativeTempo / tempo).rounded())
-        buffer = AudioUtil.timeStretch(sourceBuffer, toFrames: targetFrames)
-            ?? AudioUtil.resample(sourceBuffer, toFrames: targetFrames)
-            ?? sourceBuffer
+        if let cached = cachedWarp(frames) {
+            buffer = cached
+            return
+        }
+        let warped = Self.render(sourceBuffer, toFrames: frames)
+        buffer = warped
+        cacheWarp(warped, frames: frames)
+    }
+
+    /// The same warp with the render moved off the main actor, so re-warping a
+    /// whole session on a tempo change doesn't freeze the UI. A cache hit (or a
+    /// return to the native tempo) resolves without leaving the main actor at
+    /// all, so the common cases stay immediate.
+    func warp(to tempo: Double) async {
+        guard let frames = targetFrames(for: tempo) else {
+            buffer = sourceBuffer
+            return
+        }
+        if let cached = cachedWarp(frames) {
+            buffer = cached
+            return
+        }
+        let rendered = await Self.renderOffMainActor(AudioBufferBox(sourceBuffer), toFrames: frames)
+        buffer = rendered.buffer
+        cacheWarp(rendered.buffer, frames: frames)
+    }
+
+    private func cachedWarp(_ frames: Int) -> AVAudioPCMBuffer? {
+        warpCache.first { $0.frames == frames }?.buffer
+    }
+
+    private func cacheWarp(_ buffer: AVAudioPCMBuffer, frames: Int) {
+        warpCache.removeAll { $0.frames == frames }
+        warpCache.insert((frames, buffer), at: 0)
+        if warpCache.count > Self.warpCacheLimit { warpCache.removeLast() }
+    }
+
+    nonisolated private static func render(_ source: AVAudioPCMBuffer,
+                                           toFrames frames: Int) -> AVAudioPCMBuffer {
+        AudioUtil.timeStretch(source, toFrames: frames)
+            ?? AudioUtil.resample(source, toFrames: frames)
+            ?? source
+    }
+
+    /// `nonisolated async` runs on the global executor rather than inheriting
+    /// the caller's actor — which is the whole point: this is the tens of
+    /// milliseconds of DSP that used to run on the main actor.
+    nonisolated private static func renderOffMainActor(_ source: AudioBufferBox,
+                                                       toFrames frames: Int) async -> AudioBufferBox {
+        AudioBufferBox(render(source.buffer, toFrames: frames))
     }
 }
 

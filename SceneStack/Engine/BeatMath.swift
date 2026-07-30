@@ -32,6 +32,21 @@ enum BeatMath {
         return max(1, Int(bars.rounded(.up)))
     }
 
+    /// How far into a loop the transport is at `beat`, given the loop began at
+    /// `loopStartBeat` and repeats every `loopBeats`. Always wrapped into
+    /// `0..<loopBeats`, including for beats before the loop started.
+    ///
+    /// This is what turns a transport beat into a position inside a clip's
+    /// buffer — used both to relaunch a loop in phase and to find the audio
+    /// playing at a launch/stop boundary.
+    static func loopOffsetBeats(atBeat beat: Double,
+                                loopStartBeat: Double,
+                                loopBeats: Double) -> Double {
+        guard loopBeats > 0 else { return 0 }
+        let offset = (beat - loopStartBeat).truncatingRemainder(dividingBy: loopBeats)
+        return offset < 0 ? offset + loopBeats : offset
+    }
+
     /// Where a row index ends up after moving the row at `source` to
     /// `destination` (identical permutation applied to every track).
     static func sceneIndexAfterMove(_ index: Int, from source: Int, to destination: Int) -> Int {

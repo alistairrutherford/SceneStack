@@ -104,20 +104,41 @@ final class TransportEngine {
         warpDebounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard let self, !Task.isCancelled else { return }
-            self.warpClipsToCurrentTempo()
+            await self.warpClipsToCurrentTempo()
         }
     }
 
     /// Re-warps every clip so its loop spans the right number of bars at the new
     /// tempo, and reschedules any playing loop with its freshly-warped buffer so
     /// it stays locked to the grid instead of drifting.
-    private func warpClipsToCurrentTempo() {
-        for clip in allClips() { clip.applyTempo(tempo) }
-        guard mode != .stopped else { return }
+    ///
+    /// Each render happens off the main actor and is awaited one clip at a time,
+    /// so a large session re-warps without the UI ever going unresponsive.
+    /// Clips that are currently sounding go first and are re-aligned the moment
+    /// their own buffer is ready, rather than waiting for the whole session.
+    private func warpClipsToCurrentTempo() async {
+        let target = tempo
+        let playingIDs = Set(playback.values.compactMap(\.playingClipID))
+        let clips = allClips()
+        let sounding = clips.filter { playingIDs.contains($0.id) }
+        let rest = clips.filter { !playingIDs.contains($0.id) }
+
+        for clip in sounding + rest {
+            await clip.warp(to: target)
+            // A newer tempo landed while this was rendering: that edit schedules
+            // its own warp, and finishing this one would fight it.
+            guard !Task.isCancelled, tempo == target else { return }
+            if mode != .stopped, playingIDs.contains(clip.id) {
+                realignPlayingLoop(clip)
+            }
+        }
+    }
+
+    /// Restarts whichever track is looping `clip`, in phase, on its newly
+    /// warped buffer.
+    private func realignPlayingLoop(_ clip: Clip) {
         for track in tracks {
-            guard let state = playback[track.id], let clipID = state.playingClipID,
-                  let clip = track.slots.compactMap({ $0 }).first(where: { $0.id == clipID })
-            else { continue }
+            guard let state = playback[track.id], state.playingClipID == clip.id else { continue }
             launcher.launchInProgress(clip: clip, on: track, loopStartBeat: state.playingStartBeat)
         }
     }
@@ -152,8 +173,49 @@ final class TransportEngine {
     var inputGain = 1.0 {
         didSet {
             recorder.setInputGain(inputGain)
+            graph.setMonitorGain(inputGain)
             UserDefaults.standard.set(inputGain, forKey: Prefs.inputGain)
         }
+    }
+
+    /// Hear live input through the armed track's effects and fader while you
+    /// play. Off by default and deliberately opt-in: on a machine using
+    /// speakers rather than headphones, monitoring an open mic feeds back.
+    var monitorInput = false {
+        didSet {
+            UserDefaults.standard.set(monitorInput, forKey: Prefs.monitorInput)
+            guard monitorInput != oldValue else { return }
+            applyMonitoring()
+        }
+    }
+
+    /// Toggles monitoring from the UI, explaining the no-op case. Separate from
+    /// the property so restoring the preference at launch doesn't post a status
+    /// message about a state the user hasn't just chosen.
+    func toggleMonitoring() {
+        monitorInput.toggle()
+        if monitorInput, armedTrack == nil {
+            statusMessage = "Monitoring is on — arm a track (●) to hear its input."
+        }
+    }
+
+    /// Which track should receive live input. Pure so the rule is testable on
+    /// its own: the armed track, but only once monitoring is on and the input
+    /// is actually live.
+    nonisolated static func monitorTarget(monitorEnabled: Bool, inputConfigured: Bool,
+                                          armedTrackID: UUID?) -> UUID? {
+        guard monitorEnabled, inputConfigured else { return nil }
+        return armedTrackID
+    }
+
+    /// Re-applies the monitoring route after anything that could change it:
+    /// the toggle, which track is armed, input coming up or going away, or
+    /// that track being deleted.
+    func applyMonitoring() {
+        let target = Self.monitorTarget(monitorEnabled: monitorInput,
+                                        inputConfigured: input.isConfigured,
+                                        armedTrackID: armedTrack?.id)
+        Task { await graph.setMonitoring(to: target, gain: inputGain) }
     }
 
     /// Preference keys for setup-level settings that persist across launches.
@@ -161,6 +223,7 @@ final class TransportEngine {
         static let metronomeEnabled = "metronomeEnabled"
         static let metronomeVolume = "metronomeVolume"
         static let inputGain = "inputGain"
+        static let monitorInput = "monitorInput"
     }
 
     /// Restores setup preferences; each assignment re-applies via its didSet.
@@ -174,6 +237,9 @@ final class TransportEngine {
         }
         if defaults.object(forKey: Prefs.inputGain) != nil {
             inputGain = defaults.double(forKey: Prefs.inputGain)
+        }
+        if defaults.object(forKey: Prefs.monitorInput) != nil {
+            monitorInput = defaults.bool(forKey: Prefs.monitorInput)
         }
     }
 
@@ -242,13 +308,20 @@ final class TransportEngine {
         undoManager.removeAllActions()
         hasUnsavedChanges = false
 
-        // Autosave every two minutes once the project has a home, while idle.
+        // Autosave every two minutes once the project has a home, while idle and
+        // only when there is something new to write. A failure here matters —
+        // the user believes their work is being saved — so it surfaces rather
+        // than being swallowed.
         Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 120_000_000_000)
                 guard let self else { return }
-                if let url = self.projectURL, self.mode == .stopped {
-                    try? ProjectStore.write(engine: self, to: url)
+                guard let url = self.projectURL, self.mode == .stopped,
+                      self.hasUnsavedChanges else { continue }
+                do {
+                    try ProjectStore.write(engine: self, to: url)
+                } catch {
+                    self.engineError = "Autosave failed: \(error.localizedDescription)"
                 }
             }
         }
@@ -307,6 +380,7 @@ final class TransportEngine {
         if selectedTrackID == track.id { selectedTrackID = tracks.first?.id }
         if selectedSlot?.trackID == track.id { selectedSlot = nil }
         applyMixAll()
+        applyMonitoring()   // the monitored track may have been the deleted one
         markDirty()
         registerUndo("Delete Track") { $0.restoreTrack(track, at: index, effects: savedEffects) }
     }
@@ -706,6 +780,7 @@ final class TransportEngine {
     func toggleArm(_ track: Track) {
         if track.isArmed {
             track.isArmed = false
+            applyMonitoring()   // nothing armed — drop the monitor path
             return
         }
         guard mode != .recording else { return }
@@ -728,6 +803,7 @@ final class TransportEngine {
     private func armOnly(_ track: Track) {
         for other in tracks { other.isArmed = (other.id == track.id) }
         selectTrack(track)
+        applyMonitoring()   // monitoring follows the armed track
     }
 
     func selectInputDevice(_ id: AudioDeviceID) {
@@ -754,10 +830,12 @@ final class TransportEngine {
             engineError = nil
             statusMessage = nil
             if let track { armOnly(track) }
+            applyMonitoring()   // bring-up rewired the input; re-establish the route
         case .successUsingDefault:
             engineError = nil
             statusMessage = "Using the system default input device."
             if let track { armOnly(track) }
+            applyMonitoring()
         case .permissionDenied:
             engineError = "Microphone access denied — enable it in System Settings › Privacy & Security › Microphone."
         case .failed(let message):
@@ -1134,10 +1212,24 @@ final class TransportEngine {
         // The device we were capturing from disappeared: keep what we have.
         stop()
         input.teardown()
+        applyMonitoring()   // the input is gone; tear the monitor path down too
         statusMessage = "Input device disconnected — recording stopped."
     }
 
     // MARK: - Engine lifecycle
+
+    /// Stops the transport and tears down the audio graph.
+    ///
+    /// The app's engine lives as long as the process, so nothing calls this in
+    /// normal use. It matters for anything that creates engines and lets them
+    /// go — releasing one while its graph is still rendering leaves the audio
+    /// thread calling into deallocated objects (`MetronomeSource`'s render
+    /// block holds an `unowned` reference, as real-time code must: it can
+    /// neither retain nor take a lock).
+    func shutdown() {
+        stop()
+        graph.stop()
+    }
 
     private func startEngine() {
         engineError = graph.start()

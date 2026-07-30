@@ -88,6 +88,10 @@ final class AudioGraph {
 
     func removeChannel(for id: UUID) {
         guard let channel = channels[id] else { return }
+        if monitoredTrackID == id {
+            engine.disconnectNodeOutput(monitorMixer)
+            monitoredTrackID = nil
+        }
         channel.pendingTask?.cancel()
         channel.stopAllPlayers()
         channel.mixer.removeTap(onBus: 0)
@@ -108,6 +112,65 @@ final class AudioGraph {
 
     func meterLevels(for id: UUID) -> (left: Double, right: Double) {
         channels[id]?.meter.levels ?? (0, 0)
+    }
+
+    // MARK: - Input monitoring
+
+    /// Live input routed into a track's channel, so a performer hears
+    /// themselves through that track's effects, fader and pan — the same path
+    /// the recorded take will play back through.
+    ///
+    /// Its own mixer node rather than a direct input → channel connection, so
+    /// the routing is a single edge to switch, input gain applies to what's
+    /// heard, and the switch can be faded.
+    let monitorMixer = AVAudioMixerNode()
+
+    /// The track currently receiving live input, if any.
+    private(set) var monitoredTrackID: UUID?
+
+    /// Forgets the monitor route without touching the graph — for use after a
+    /// reset or device change has already torn the connections down, so the
+    /// next request rewires instead of assuming it is still connected.
+    func invalidateMonitoring() {
+        monitoredTrackID = nil
+    }
+
+    func setMonitorGain(_ gain: Double) {
+        guard monitoredTrackID != nil else { return }
+        monitorMixer.outputVolume = Float(max(0, gain))
+    }
+
+    /// Routes live input into `trackID`'s channel, or tears the path down when
+    /// `trackID` is nil. Faded at both ends: rewiring a running graph clicks
+    /// otherwise, and this one is rewired every time the armed track changes.
+    func setMonitoring(to trackID: UUID?, gain: Double) async {
+        guard trackID != monitoredTrackID else {
+            setMonitorGain(gain)
+            return
+        }
+        await rampVolume(monitorMixer, from: monitorMixer.outputVolume, to: 0, milliseconds: 10)
+        let connected = connectMonitor(to: trackID)
+        monitoredTrackID = connected ? trackID : nil
+        guard connected else { return }
+        await rampVolume(monitorMixer, from: 0, to: Float(max(0, gain)), milliseconds: 10)
+    }
+
+    /// Rewires input → monitor → channel. Returns whether a path was actually
+    /// established, so a request that can't be honoured doesn't get recorded as
+    /// if it had been.
+    @discardableResult
+    private func connectMonitor(to trackID: UUID?) -> Bool {
+        if monitorMixer.engine == nil { engine.attach(monitorMixer) }
+        engine.disconnectNodeOutput(monitorMixer)
+        engine.disconnectNodeInput(monitorMixer)
+        guard let trackID, let channel = channels[trackID] else { return false }
+        // An input that isn't live yet reports no channels; connecting from it
+        // would throw inside the engine.
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else { return false }
+        engine.connect(inputNode, to: monitorMixer, format: inputFormat)
+        engine.connect(monitorMixer, to: channel.inputMixer, format: standardFormat)
+        return true
     }
 
     // MARK: - Effects

@@ -83,4 +83,34 @@ final class BeatMathTests: XCTestCase {
             XCTAssertEqual(back, index, "index \(index) did not round-trip")
         }
     }
+
+    // MARK: - loop offset
+
+    func testLoopOffsetWithinTheFirstCycle() {
+        // A 2-bar loop (8 beats) launched at beat 4, asked about beat 9.
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: 9, loopStartBeat: 4, loopBeats: 8),
+                       5, accuracy: 1e-9)
+    }
+
+    func testLoopOffsetWrapsAcrossCycles() {
+        // Beat 20 is 16 beats after the start — two whole cycles.
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: 20, loopStartBeat: 4, loopBeats: 8),
+                       0, accuracy: 1e-9)
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: 23, loopStartBeat: 4, loopBeats: 8),
+                       3, accuracy: 1e-9)
+    }
+
+    func testLoopOffsetIsNeverNegative() {
+        // Beats before the loop started still map into 0..<loopBeats, so a
+        // boundary computed slightly behind the clock can't index backwards
+        // into the buffer.
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: 2, loopStartBeat: 4, loopBeats: 8),
+                       6, accuracy: 1e-9)
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: -13, loopStartBeat: 0, loopBeats: 8),
+                       3, accuracy: 1e-9)
+    }
+
+    func testLoopOffsetOfAZeroLengthLoopIsZero() {
+        XCTAssertEqual(BeatMath.loopOffsetBeats(atBeat: 5, loopStartBeat: 0, loopBeats: 0), 0)
+    }
 }
